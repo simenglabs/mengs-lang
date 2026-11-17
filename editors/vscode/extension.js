@@ -14,13 +14,17 @@ const {
 const LANG = 'meng';
 const DIAGNOSTIC_DELAY_MS = 300;
 
-// VS Code launched from the Dock often lacks ~/.cargo/bin in PATH, so fall back to it.
-const CARGO_MENG = path.join(os.homedir(), '.cargo', 'bin', 'meng');
+// VS Code launched from the Dock often lacks the install folders in PATH, so look
+// there too: ~/.meng/bin (prebuilt download) and ~/.cargo/bin (built from source).
+const INSTALLED = [
+  path.join(os.homedir(), '.meng', 'bin', 'meng'),
+  path.join(os.homedir(), '.cargo', 'bin', 'meng'),
+];
 
 function compilerPath() {
   const configured = vscode.workspace.getConfiguration('meng').get('compilerPath') || 'meng';
-  if (configured === 'meng' && fs.existsSync(CARGO_MENG)) return CARGO_MENG;
-  return configured;
+  if (configured !== 'meng') return configured;
+  return INSTALLED.find((p) => fs.existsSync(p)) || configured;
 }
 
 /** The document's folder: `use "x.meng";` resolves from there. */

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests
+        run: cargo test
+      - name: Interpreter and compiled program print the same output
+        run: |
+          cargo build --release
+          ./target/release/meng interpret test/main.meng > interpreted.txt
+          ./target/release/meng compile test/main.meng
+          ./main > compiled.txt
+          diff compiled.txt interpreted.txt
+      - name: Generated C has no warnings
+        run: |
+          ./target/release/meng emit test/main.meng > main.c
+          cc -Wall -Wextra -Werror -o /dev/null main.c
+      - name: Generated C is memory safe (AddressSanitizer)
+        run: |
+          cc -fsanitize=address -g -o main_asan main.c
+          ./main_asan > /dev/null
+      - name: Installer and extension scripts
+        run: |
+          sh -n install.sh
+          sh editors/vscode/package.sh meng-lang.vsix
+          node --check editors/vscode/extension.js
+          node --check editors/vscode/symbols.js

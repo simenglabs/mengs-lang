@@ -11,13 +11,16 @@ The name comes from **meng** — an Indonesian nickname for a cat, inspired by i
 
 ## Install
 
-Requires Rust with support for the 2024 edition. GCC is needed to compile and run native binaries.
+Downloads a prebuilt binary for Linux or macOS (no Rust needed); without a release
+for your machine it builds from source, which needs Rust (2024 edition).
+GCC is only needed to compile programs to native binaries.
 
 ```bash
 curl -sSf https://raw.githubusercontent.com/simenglabs/mengs-lang/main/install.sh | sh
 ```
 
-To also install the VS Code extension, append `-s -- --vscode` after `sh`.
+To also install the VS Code extension, append `-s -- --vscode` after `sh`
+(`--from-source` builds with Rust instead of downloading).
 From a local checkout, use `./install.sh`.
 Open a new terminal if the installer updates your PATH.
 

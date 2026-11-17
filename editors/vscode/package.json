@@ -4,6 +4,11 @@
   "description": "Syntax highlighting, IntelliSense, and live diagnostics for the Meng language",
   "version": "0.1.0",
   "publisher": "menglabs",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simenglabs/mengs-lang"
+  },
   "license": "UNLICENSED",
   "engines": {
     "vscode": "^1.75.0"

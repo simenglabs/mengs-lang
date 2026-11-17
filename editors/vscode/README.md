@@ -16,17 +16,20 @@ Language support for [Meng](../../README.md) (`.meng`).
 ## Requirements
 
 The `meng` binary. Install it from the repository root with `cargo install --path .`.
-The extension looks for `meng` on `PATH`, then in `~/.cargo/bin`.
+The extension looks for `meng` on `PATH`, then in `~/.meng/bin` and `~/.cargo/bin`.
 Use the `meng.compilerPath` setting to point at another binary.
 
 ## Install locally
 
+The installer can add it: `./install.sh --vscode` (or `... | sh -s -- --vscode`).
+To package it yourself (no npm needed):
+
 ```bash
-npx @vscode/vsce package --allow-missing-repository --skip-license
-code --install-extension meng-lang-0.1.0.vsix
+editors/vscode/package.sh meng-lang.vsix
+code --install-extension meng-lang.vsix
 ```
 
-Reinstall after changing the extension source.
+Reinstall after changing the extension source. Every GitHub release also has a `meng-lang.vsix`.
 
 ## Known limitations
 

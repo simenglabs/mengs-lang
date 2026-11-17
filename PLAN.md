@@ -54,7 +54,7 @@ So `set c: int = a + b;` leaves `a` and `b` usable, and `a + a` is valid.
 | Several statements per line | Becomes possible once the tokenizer handles `;`. |
 | Smarter autocomplete | `if`/loop block scope, hide moved variables. Best done by having `meng` output symbols (e.g. `meng symbols file.meng`) instead of regexes in JS. |
 
-## Phase 5 — Distribution
+## Phase 5 — Distribution ✅ (Marketplace: needs a publisher account)
 | Item | Notes |
 |---|---|
 | Prebuilt binaries | GitHub Actions builds per OS into Releases; `install.sh` downloads them, so Rust is no longer required. |
