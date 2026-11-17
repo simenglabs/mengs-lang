@@ -11,7 +11,7 @@ mod check;
 mod comments;
 mod expr;
 mod scope;
-mod stmt;
+mod stmt; #[cfg(test)] mod tests;
 
 use crate::ast::{Expr, Function, Program, Stmt};
 use check::{PendingCall, check_calls};

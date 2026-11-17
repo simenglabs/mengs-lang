@@ -3,13 +3,13 @@
 See [PLAN.md](PLAN.md) for the order and approach.
 
 ## High priority
-- [ ] Commit to git (everything in the repo is still untracked)
+- [x] Commit to git
 - [ ] Arithmetic: `+ - * / %`, string concatenation
 - [ ] Reassign a variable (`x = 5;`)
 - [ ] Function return values (`fnc Add(a: int, b: int): int`)
 - [ ] Loops (`while` / `for`)
 - [ ] Logical conditions: `and`, `or`, `not`
-- [ ] Parser unit tests (ownership, borrow, copy, errors)
+- [x] Parser unit tests (ownership, borrow, copy, errors)
 
 ## Medium priority
 - [ ] Report all errors at once, not just the first one
