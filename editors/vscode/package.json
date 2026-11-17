@@ -1,0 +1,62 @@
+{
+  "name": "meng-lang",
+  "displayName": "Meng Language",
+  "description": "Syntax highlighting, IntelliSense, and live diagnostics for the Meng language",
+  "version": "0.1.0",
+  "publisher": "menglabs",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:meng"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "meng",
+        "aliases": ["Meng", "meng"],
+        "extensions": [".ml", ".meng"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "meng",
+        "scopeName": "source.meng",
+        "path": "./syntaxes/meng.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "meng",
+        "path": "./snippets/meng.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "meng.interpret",
+        "title": "Meng: Run File (Interpreter)"
+      },
+      {
+        "command": "meng.run",
+        "title": "Meng: Compile & Run File (GCC)"
+      }
+    ],
+    "configuration": {
+      "title": "Meng",
+      "properties": {
+        "meng.compilerPath": {
+          "type": "string",
+          "default": "meng",
+          "description": "Path to the `meng` compiler binary, used for diagnostics and the run commands."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+# TODO
+
+## High priority
+- [ ] Commit to git (everything in the repo is still untracked)
+- [ ] Arithmetic: `+ - * / %`, string concatenation
+- [ ] Reassign a variable (`x = 5;`)
+- [ ] Function return values (`fnc Add(a: int, b: int): int`)
+- [ ] Loops (`while` / `for`)
+- [ ] Logical conditions: `and`, `or`, `not`
+- [ ] Parser unit tests (ownership, borrow, copy, errors)
+
+## Medium priority
+- [ ] Report all errors at once, not just the first one
+- [ ] User input (`read`)
+- [ ] Arrays / lists
+- [ ] Heap-allocated strings + automatic `free` (where ownership saves memory)
+- [ ] More than one statement per line / blocks spanning lines more freely
+- [ ] Autocomplete: scope inside `if` blocks, hide moved variables
+- [ ] `output.c` goes to a temp folder, not the current directory
+
+## Low priority
+- [ ] `-O2` flag when compiling with GCC
+- [ ] Modules / `import` across files
+- [ ] Column in error messages (not just the line)
+- [ ] Extension: README, icon, publish to the Marketplace
+- [ ] Default extension `.meng` (`.ml` clashes with OCaml)

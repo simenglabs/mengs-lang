@@ -1,0 +1,57 @@
+{
+  "Function": {
+    "prefix": "fnc",
+    "body": ["fnc ${1:Name}(${2:param}: ${3|str,int,float,bool|})->", "\t$0", "<-;"],
+    "description": "Define a function"
+  },
+  "If": {
+    "prefix": "if",
+    "body": ["if ${1:a} ${2|=,!=,<,>,<=,>=|} ${3:b} ->", "\t$0", "<-;"],
+    "description": "if block"
+  },
+  "If / else": {
+    "prefix": "ife",
+    "body": ["if ${1:a} ${2|=,!=,<,>,<=,>=|} ${3:b} ->", "\t$4", "<- else ->", "\t$0", "<-;"],
+    "description": "if / else block"
+  },
+  "Else if": {
+    "prefix": "elif",
+    "body": ["<- else if ${1:a} ${2|=,!=,<,>,<=,>=|} ${3:b} ->", "\t$0"],
+    "description": "else if branch"
+  },
+  "Variable": {
+    "prefix": "set",
+    "body": ["set ${1:name}: ${2|str,int,float,bool|} = ${3:value};"],
+    "description": "Declare a variable (moved on first move)"
+  },
+  "Constant": {
+    "prefix": "setk",
+    "body": ["set keep ${1:name}: ${2|str,int,float,bool|} = ${3:value};"],
+    "description": "Declare a constant (keep)"
+  },
+  "Reusable variable": {
+    "prefix": "setr",
+    "body": ["set reuse ${1:name}: ${2|str,int,float,bool|} = ${3:value};"],
+    "description": "Declare a reusable variable"
+  },
+  "Borrow": {
+    "prefix": "borrow",
+    "body": ["set ${1:alias}: ${2|str,int,float,bool|} <== ${3:owner};"],
+    "description": "Borrow a variable without moving it"
+  },
+  "Copy": {
+    "prefix": "copy",
+    "body": ["${1:source} ()=> ${2:copy};"],
+    "description": "Copy a variable into a new one"
+  },
+  "Show": {
+    "prefix": "show",
+    "body": ["show(${1:value});"],
+    "description": "Print a value"
+  },
+  "Comment": {
+    "prefix": "%",
+    "body": ["% ${1:comment} %"],
+    "description": "Comment"
+  }
+}

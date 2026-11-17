@@ -1,0 +1,20 @@
+{
+  "comments": {
+    "blockComment": ["%", "%"]
+  },
+  "brackets": [["(", ")"]],
+  "autoClosingPairs": [
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string", "comment"] }
+  ],
+  "surroundingPairs": [
+    ["(", ")"],
+    ["\"", "\""],
+    ["%", "%"]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "->\\s*(%[^%]*%\\s*)*$",
+    "decreaseIndentPattern": "^\\s*<-"
+  },
+  "wordPattern": "-?\\d+(\\.\\d+)?|[A-Za-z_][A-Za-z0-9_]*"
+}

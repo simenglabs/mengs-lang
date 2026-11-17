@@ -1,0 +1,16 @@
+# Rust build output
+/target
+
+# Compiler output (generated C and binaries named after the source file)
+output.c
+/main
+/program
+/test/main
+
+# VS Code extension packages
+*.vsix
+node_modules/
+
+# OS / editor
+.DS_Store
+*.swp
