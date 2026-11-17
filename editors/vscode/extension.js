@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 const {
   KEYWORDS, TYPES, CONSTANTS, BUILTINS,
-  indexSymbols, visibleVariables, callContext, describeVar,
+  indexSymbols, fromCompiler, visibleVariables, callContext, describeVar,
 } = require('./symbols');
 
 const LANG = 'meng';
@@ -23,6 +23,44 @@ function compilerPath() {
   return configured;
 }
 
+function workingDir(document) {
+  return vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath || path.dirname(document.uri.fsPath);
+}
+
+// ---------------------------------------------------------------- symbols
+
+/** Last `meng symbols` result per document: { version, promise }. */
+const symbolCache = new Map();
+
+/** Ask the compiler for symbols (null if it is missing or too old). */
+function compilerSymbols(document) {
+  const key = document.uri.toString();
+  const hit = symbolCache.get(key);
+  if (hit && hit.version === document.version) return hit.promise;
+  const promise = new Promise((resolve) => {
+    const child = cp.spawn(compilerPath(), ['symbols', '-'], { cwd: workingDir(document) });
+    let out = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.on('error', () => resolve(null));
+    child.on('close', () => {
+      try {
+        resolve(fromCompiler(JSON.parse(out)));
+      } catch {
+        resolve(null);
+      }
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(document.getText());
+  });
+  symbolCache.set(key, { version: document.version, promise });
+  return promise;
+}
+
+/** Compiler symbols when available, otherwise the built-in regex index. */
+async function indexFor(document) {
+  return (await compilerSymbols(document)) || indexSymbols(document.getText());
+}
+
 function wordAt(document, position) {
   const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
   return range ? document.getText(range) : null;
@@ -31,7 +69,7 @@ function wordAt(document, position) {
 // ---------------------------------------------------------------- completion
 
 const completionProvider = {
-  provideCompletionItems(document, position) {
+  async provideCompletionItems(document, position) {
     const prefix = document.lineAt(position).text.slice(0, position.character);
 
     // After `name:` only types make sense.
@@ -39,7 +77,7 @@ const completionProvider = {
       return TYPES.map((t) => new vscode.CompletionItem(t, vscode.CompletionItemKind.TypeParameter));
     }
 
-    const index = indexSymbols(document.getText());
+    const index = await indexFor(document);
     const items = [];
 
     for (const k of KEYWORDS) items.push(new vscode.CompletionItem(k, vscode.CompletionItemKind.Keyword));
@@ -74,15 +112,15 @@ const completionProvider = {
 // ---------------------------------------------------------------- hover
 
 const hoverProvider = {
-  provideHover(document, position) {
+  async provideHover(document, position) {
     const word = wordAt(document, position);
     if (!word) return null;
-    const index = indexSymbols(document.getText());
+    const index = await indexFor(document);
 
     const f = index.functions.find((fn) => fn.name === word);
     if (f) return new vscode.Hover(new vscode.MarkdownString().appendCodeblock(f.signature, LANG));
 
-    const v = visibleVariables(index, position.line).find((x) => x.name === word);
+    const v = visibleVariables(index, position.line, true).find((x) => x.name === word);
     if (v) return new vscode.Hover(new vscode.MarkdownString().appendCodeblock(describeVar(v), LANG));
     return null;
   },
@@ -91,11 +129,11 @@ const hoverProvider = {
 // ---------------------------------------------------------------- signature help
 
 const signatureProvider = {
-  provideSignatureHelp(document, position) {
+  async provideSignatureHelp(document, position) {
     const prefix = document.lineAt(position).text.slice(0, position.character);
     const ctx = callContext(prefix);
     if (!ctx) return null;
-    const f = indexSymbols(document.getText()).functions.find((fn) => fn.name === ctx.name);
+    const f = (await indexFor(document)).functions.find((fn) => fn.name === ctx.name);
     if (!f) return null;
 
     const sig = new vscode.SignatureInformation(f.signature);
@@ -114,12 +152,12 @@ const signatureProvider = {
 // ---------------------------------------------------------------- go to definition
 
 const definitionProvider = {
-  provideDefinition(document, position) {
+  async provideDefinition(document, position) {
     const word = wordAt(document, position);
     if (!word) return null;
-    const index = indexSymbols(document.getText());
+    const index = await indexFor(document);
     const target =
-      visibleVariables(index, position.line).find((v) => v.name === word) ||
+      visibleVariables(index, position.line, true).find((v) => v.name === word) ||
       index.functions.find((f) => f.name === word);
     if (!target) return null;
     return new vscode.Location(document.uri, new vscode.Position(target.line, Math.max(target.column, 0)));
@@ -130,11 +168,10 @@ const definitionProvider = {
 
 let warnedMissingCompiler = false;
 
-/** Run `meng check -` on the document text and show its error (if any). */
+/** Run `meng check -` on the document text and show its errors. */
 function checkDocument(document, collection) {
   if (document.languageId !== LANG) return;
-  const cwd = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath || path.dirname(document.uri.fsPath);
-  const child = cp.spawn(compilerPath(), ['check', '-'], { cwd });
+  const child = cp.spawn(compilerPath(), ['check', '-'], { cwd: workingDir(document) });
   let stderr = '';
   child.stderr.on('data', (d) => (stderr += d));
 
@@ -207,7 +244,10 @@ function activate(context) {
     vscode.languages.registerDefinitionProvider(selector, definitionProvider),
     vscode.workspace.onDidOpenTextDocument(scheduleCheck),
     vscode.workspace.onDidChangeTextDocument((e) => scheduleCheck(e.document)),
-    vscode.workspace.onDidCloseTextDocument((d) => collection.delete(d.uri)),
+    vscode.workspace.onDidCloseTextDocument((d) => {
+      collection.delete(d.uri);
+      symbolCache.delete(d.uri.toString());
+    }),
     vscode.commands.registerCommand('meng.interpret', () => runInTerminal('interpret')),
     vscode.commands.registerCommand('meng.run', () => runInTerminal('run')),
   );

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -10,6 +11,14 @@ pub enum Access {
     Read,
     /// `set y: T = x;`, `Func(x)`, `return x;`: ownership moves out of `x`.
     Move,
+}
+
+/// A variable was moved out (`moved`) or got a new value (`!moved`) on `line`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnershipEvent {
+    pub name: String,
+    pub line: usize,
+    pub moved: bool,
 }
 
 /// How a variable was declared.
@@ -41,11 +50,18 @@ struct VarInfo {
 pub struct Scope {
     vars: HashMap<String, VarInfo>,
     functions: Rc<HashMap<String, Signature>>,
+    /// Moves and reassigns, in source order, for editor tooling (shared by all copies).
+    events: Rc<RefCell<Vec<OwnershipEvent>>>,
 }
 
 impl Scope {
-    pub fn new(functions: Rc<HashMap<String, Signature>>) -> Scope {
-        Scope { vars: HashMap::new(), functions }
+    pub fn new(functions: Rc<HashMap<String, Signature>>, events: Rc<RefCell<Vec<OwnershipEvent>>>) -> Scope {
+        Scope { vars: HashMap::new(), functions, events }
+    }
+
+    /// How a variable was declared (`None` for borrows and unknown names).
+    pub fn kind_of(&self, name: &str) -> Option<Kind> {
+        self.vars.get(name).filter(|v| v.borrows.is_none()).map(|v| v.kind)
     }
 
     pub fn function(&self, name: &str) -> Option<&Signature> {
@@ -102,6 +118,7 @@ impl Scope {
         let ty = var.ty;
         if access == Access::Move && var.kind == Kind::Owned && var.borrows.is_none() {
             self.vars.get_mut(name).unwrap().moved_at = Some(line);
+            self.events.borrow_mut().push(OwnershipEvent { name: name.to_string(), line, moved: true });
         }
         Ok(ty)
     }
@@ -118,6 +135,7 @@ impl Scope {
         }
         let ty = var.ty;
         self.vars.get_mut(name).unwrap().moved_at = None;
+        self.events.borrow_mut().push(OwnershipEvent { name: name.to_string(), line, moved: false });
         self.make_borrows_stale(name, line);
         Ok(ty)
     }

@@ -809,3 +809,29 @@ fn comment_errors_have_a_column() {
     let errors = parse("show(1);\n  % never closed").unwrap_err();
     assert_eq!((errors[0].line, errors[0].column), (2, 3));
 }
+
+// ------------------------------------------------------------- symbols for editors
+
+#[test]
+fn symbols_know_block_scopes_and_moves() {
+    let src = "fnc F(keep who: str): int ->\n    if true ->\n        set x: int = 1;\n    <-;\n    return 1;\n<-;\n\
+               set name: str = \"a\";\nset other: str = name;\nname = \"b\";\nset r: str <== name;\nshow(nope);";
+    let s = super::symbols(src);
+    let var = |n: &str| s.variables.iter().find(|v| v.name == n).unwrap_or_else(|| panic!("no symbol {n}"));
+    assert_eq!((var("who").kind, var("who").end, var("who").function.as_deref()), ("keep", 6, Some("F")));
+    assert_eq!((var("x").line, var("x").end), (3, 4), "x lives in the if block");
+    assert_eq!((var("name").kind, var("name").column), ("owned", 5));
+    assert_eq!(var("r").kind, "borrow");
+    assert_eq!(var("name").end, 11, "top-level variables last until the end of the file");
+    let events: Vec<(&str, usize, bool)> = s.events.iter().map(|e| (e.name.as_str(), e.line, e.moved)).collect();
+    assert_eq!(events, vec![("name", 8, true), ("name", 9, false)]);
+    assert_eq!(s.functions[0].end, 6);
+}
+
+#[test]
+fn symbols_json_is_well_formed() {
+    let json = super::symbols("fnc F(s: str = \"a\\\"b\")->\n<-;\nset t: [int] = [];").to_json();
+    assert!(json.starts_with("{\"functions\":[{\"name\":\"F\""), "{json}");
+    assert!(json.contains(r#""signature":"fnc F(s: str = \"a\\\"b\")""#), "{json}");
+    assert!(json.contains(r#"{"name":"t","type":"[int]","kind":"owned","line":3,"column":5,"end":3,"function":null}"#), "{json}");
+}

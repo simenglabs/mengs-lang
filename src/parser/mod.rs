@@ -8,6 +8,7 @@
 //! - `expr.rs`     — expressions by precedence, type checks, calls, identifiers
 //! - `scope.rs`    — variable tracking (types, ownership: move / reuse / borrow / reassign)
 //! - `check.rs`    — function call checks (argument count/types, defaults)
+//! - `symbols.rs`  — functions, variables, and ownership events for editors (`meng symbols`)
 
 mod check;
 mod comments;
@@ -16,9 +17,11 @@ mod expr;
 mod lexer;
 mod scope;
 mod stmt;
+mod symbols;
 #[cfg(test)]
 mod tests;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -29,23 +32,51 @@ use diagnostic::{Piece, diagnostic, split_pieces};
 use expr::{BUILTINS, parse_condition, parse_typed};
 use scope::{Access, Kind, Scope};
 use stmt::{check_assign, declare_after_error, parse_fn_header, parse_stmt};
+pub use symbols::Symbols;
+use symbols::{FunctionSymbol, VariableSymbol};
 
 /// Parse source code into a `Program`, or return every error found
 /// (unrecognized statements, syntax and type errors, ownership errors, ...).
 pub fn parse(code: &str) -> Result<Program, Vec<Diagnostic>> {
-    let code = strip_comments(code).map_err(|e| vec![e])?;
+    analyze(code).0
+}
+
+/// Symbols for editor tooling. Works on code with errors too.
+pub fn symbols(code: &str) -> Symbols {
+    analyze(code).1
+}
+
+fn analyze(code: &str) -> (Result<Program, Vec<Diagnostic>>, Symbols) {
+    let code = match strip_comments(code) {
+        Ok(code) => code,
+        Err(e) => return (Err(vec![e]), Symbols::default()),
+    };
     let pieces = split_pieces(&code);
+    let last_line = code.lines().count().max(1);
     let mut errors = Vec::new();
     let (functions, headers) = collect_signatures(&pieces, &mut errors);
-    let mut parser = Parser { pieces, pos: 0, functions: Rc::new(functions), headers, current: None, errors };
-    let program = parser.parse_program();
+    let mut parser = Parser {
+        pieces,
+        pos: 0,
+        functions: Rc::new(functions),
+        headers,
+        current: None,
+        errors,
+        events: Rc::default(),
+        symbols: Symbols::default(),
+        blocks: Vec::new(),
+    };
+    let program = parser.parse_program(last_line);
+    let mut symbols = parser.symbols;
+    symbols.events = parser.events.take();
+
     let mut errors = parser.errors;
     if errors.is_empty() {
-        return Ok(program);
+        return (Ok(program), symbols);
     }
     errors.sort_by_key(|e| (e.line, e.column));
     errors.dedup();
-    Err(errors)
+    (Err(errors), symbols)
 }
 
 /// First pass: read every function header, so calls (and their return types)
@@ -112,6 +143,10 @@ struct Parser<'a> {
     /// The function being parsed (for `return`), `None` at the top level.
     current: Option<Signature>,
     errors: Vec<Diagnostic>,
+    events: Rc<RefCell<Vec<scope::OwnershipEvent>>>,
+    symbols: Symbols,
+    /// Indices into `symbols.variables` declared in each open block.
+    blocks: Vec<Vec<usize>>,
 }
 
 impl<'a> Parser<'a> {
@@ -131,9 +166,33 @@ impl<'a> Parser<'a> {
         self.error(piece, message);
     }
 
-    fn parse_program(&mut self) -> Program {
+    /// Record a declared variable (visible until its block closes).
+    fn declare_symbol(&mut self, piece: Piece, name: &str, ty: crate::ast::Type, kind: &'static str) {
+        let column = diagnostic(piece, format!("`{}`", name)).column;
+        let function = self.current.as_ref().map(|f| f.name.clone());
+        let symbol = VariableSymbol { name: name.to_string(), ty: ty.name(), kind, line: piece.line, column, end: piece.line, function };
+        self.symbols.variables.push(symbol);
+        if let Some(block) = self.blocks.last_mut() {
+            block.push(self.symbols.variables.len() - 1);
+        }
+    }
+
+    /// Close the innermost symbol block at `line`.
+    fn close_symbols(&mut self, line: usize) {
+        for i in self.blocks.pop().unwrap_or_default() {
+            self.symbols.variables[i].end = line;
+        }
+    }
+
+    /// Line of the piece read last (the block terminator after `parse_block`).
+    fn last_line(&self) -> usize {
+        self.pieces.get(self.pos.saturating_sub(1).min(self.pieces.len().saturating_sub(1))).map_or(1, |p| p.line)
+    }
+
+    fn parse_program(&mut self, last_line: usize) -> Program {
         let mut program = Program::default();
-        let mut main_scope = Scope::new(self.functions.clone());
+        let mut main_scope = Scope::new(self.functions.clone(), self.events.clone());
+        self.blocks.push(Vec::new());
 
         while let Some(piece) = self.next_piece() {
             if piece.text.starts_with("fnc ") {
@@ -147,6 +206,7 @@ impl<'a> Parser<'a> {
                 program.main.push(stmt);
             }
         }
+        self.close_symbols(last_line);
         program
     }
 
@@ -168,16 +228,23 @@ impl<'a> Parser<'a> {
 
     /// `fnc Name(params)[: type] ->` followed by its body up to `<-;`.
     fn parse_function(&mut self, opener: Piece<'a>, sig: Signature) -> Function {
-        let mut scope = Scope::new(self.functions.clone());
+        let mut scope = Scope::new(self.functions.clone(), self.events.clone());
+        self.current = Some(sig.clone());
+        self.blocks.push(Vec::new());
         for p in &sig.params {
             let kind = if p.keep { Kind::Keep } else if p.reuse { Kind::Reuse } else { Kind::Owned };
             if let Err(e) = scope.declare(&p.name, p.ty, kind) {
                 self.error(opener, e);
             }
+            let label = if p.keep { "keep" } else if p.reuse { "reuse" } else { "param" };
+            self.declare_symbol(opener, &p.name, p.ty, label);
         }
-        self.current = Some(sig.clone());
         let (body, end) = self.parse_block(opener, &format!("function `{}`", sig.name), &mut scope);
+        let end_line = self.last_line();
+        self.close_symbols(end_line);
         self.current = None;
+        let column = diagnostic(opener, format!("`{}`", sig.name)).column;
+        self.symbols.functions.push(FunctionSymbol { sig: sig.clone(), line: opener.line, column, end: end_line });
         if let BlockEnd::Else(p) | BlockEnd::ElseIf(p, _) = end {
             self.error(p, "`else` without `if`");
         }
@@ -193,6 +260,14 @@ impl<'a> Parser<'a> {
 
     /// Read statements until a block terminator (function body, `if`, `else`, or `while`).
     fn parse_block(&mut self, opener: Piece<'a>, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd<'a>) {
+        self.blocks.push(Vec::new());
+        let result = self.parse_block_body(opener, what, scope);
+        let line = self.last_line();
+        self.close_symbols(line);
+        result
+    }
+
+    fn parse_block_body(&mut self, opener: Piece<'a>, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd<'a>) {
         let mut body = Vec::new();
         while let Some(piece) = self.next_piece() {
             match parse_block_end(piece) {
@@ -301,6 +376,15 @@ impl<'a> Parser<'a> {
             }
             _ => parse_stmt(text, scope, piece.line),
         };
+        if let Ok(Some(Stmt::Set { name, ty, keep, borrow, .. })) = &result {
+            let kind = match (keep, borrow, scope.kind_of(name)) {
+                (true, _, _) => "keep",
+                (_, true, _) => "borrow",
+                (_, _, Some(Kind::Reuse)) => "reuse",
+                _ => "owned",
+            };
+            self.declare_symbol(piece, name, *ty, kind);
+        }
         result.unwrap_or_else(|e| {
             self.error(piece, e);
             // Keep a failed `set`'s variable known, so later lines don't report it as undeclared.

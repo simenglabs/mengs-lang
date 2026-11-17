@@ -45,7 +45,7 @@ So `set c: int = a + b;` leaves `a` and `b` usable, and `a + a` is valid.
 | Input `read()` | Returns `str`. Add `int(s)` / `float(s)` conversions. |
 | Arrays | `set xs: [int] = [1, 2, 3];`, `xs[0]`, `len(xs)`. Same ownership rules as strings. |
 
-## Phase 4 — Tooling and quality
+## Phase 4 — Tooling and quality ✅
 | Item | Notes |
 |---|---|
 | All errors at once | Parser collects errors and skips to the next line instead of stopping. The extension already shows multiple. |

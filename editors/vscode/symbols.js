@@ -76,7 +76,8 @@ function splitArgs(s) {
 function describeVar(v) {
   const prefix = { keep: 'keep ', reuse: 'reuse ' }[v.kind] || '';
   const note = { borrow: ' (borrowed)', copy: ' (copy)', param: ' (parameter)' }[v.kind] || '';
-  return `${prefix}${v.name}: ${v.type}${note}`;
+  const moved = v.movedAt !== null && v.movedAt !== undefined ? ` (moved on line ${v.movedAt + 1})` : '';
+  return `${prefix}${v.name}: ${v.type}${note}${moved}`;
 }
 
 /**
@@ -148,14 +149,63 @@ function indexSymbols(text) {
   return { functions, variables, scopeAt };
 }
 
-/** Variables visible at `line`: same scope, declared on or before that line. */
-function visibleVariables(index, line) {
+/**
+ * Build an index from `meng symbols` output (compiler data: exact block scopes
+ * and ownership events). Lines and columns become 0-based like the regex index.
+ */
+function fromCompiler(data) {
+  const functions = data.functions.map((f) => ({
+    name: f.name,
+    params: f.params,
+    line: f.line - 1,
+    column: f.column - 1,
+    endLine: f.end - 1,
+    signature: f.signature,
+    returns: f.returns,
+  }));
+  const variables = data.variables.map((v) => ({
+    name: v.name,
+    type: v.type,
+    kind: v.kind,
+    line: v.line - 1,
+    column: v.column - 1,
+    endLine: v.end - 1,
+    scope: v.function,
+    // Moves (moved: true) and new values (moved: false) of this variable, in order.
+    events: data.events
+      .filter((e) => e.name === v.name && e.line >= v.line && e.line <= v.end)
+      .map((e) => ({ line: e.line - 1, moved: e.moved })),
+  }));
+  function scopeAt(line) {
+    const f = functions.find((fn) => line >= fn.line && line <= fn.endLine);
+    return f ? f.name : null;
+  }
+  return { functions, variables, scopeAt, precise: true };
+}
+
+/** Line where the variable was moved, if it is still moved at `line` (compiler data only). */
+function movedAt(v, line) {
+  let moved = null;
+  for (const e of v.events || []) {
+    if (e.line >= line) break;
+    moved = e.moved ? e.line : null;
+  }
+  return moved;
+}
+
+/**
+ * Variables visible at `line`: same function, declared on or before that line,
+ * and (with compiler data) inside their block. Each gets `movedAt` (0-based line
+ * or null). Moved variables are left out unless `includeMoved` is set.
+ */
+function visibleVariables(index, line, includeMoved = false) {
   const scope = index.scopeAt(line);
   const seen = new Map();
   for (const v of index.variables) {
-    if (v.scope === scope && v.line <= line) seen.set(v.name, v);
+    const inBlock = v.endLine === undefined || line <= v.endLine;
+    if (v.scope === scope && v.line <= line && inBlock) seen.set(v.name, { ...v, movedAt: movedAt(v, line) });
   }
-  return [...seen.values()];
+  return [...seen.values()].filter((v) => includeMoved || v.movedAt === null);
 }
 
 /**
@@ -183,5 +233,5 @@ function callContext(prefix) {
 
 module.exports = {
   KEYWORDS, TYPES, CONSTANTS, BUILTINS,
-  stripComments, splitArgs, indexSymbols, visibleVariables, callContext, describeVar,
+  stripComments, splitArgs, indexSymbols, fromCompiler, visibleVariables, callContext, describeVar,
 };

@@ -16,6 +16,7 @@ enum Mode {
     Interpret,
     Check,
     Emit,
+    Symbols,
 }
 
 fn print_usage() {
@@ -25,6 +26,7 @@ fn print_usage() {
     println!("  meng interpret <file.meng>  - Run directly with the interpreter (no GCC)");
     println!("  meng check <file.meng>      - Only check for errors (use `-` to read stdin)");
     println!("  meng emit <file.meng>       - Print the generated C code");
+    println!("  meng symbols <file.meng>    - Print functions and variables as JSON (for editors)");
 }
 
 /// Print an error as `[ERROR] file:line:column: message`, followed by the
@@ -64,6 +66,7 @@ fn main() {
         "interpret" => Mode::Interpret,
         "check" => Mode::Check,
         "emit" => Mode::Emit,
+        "symbols" => Mode::Symbols,
         other => {
             eprintln!("[ERROR] Unknown command: {}", other);
             print_usage();
@@ -81,6 +84,12 @@ fn main() {
         process::exit(1);
     });
 
+    // Editors ask for symbols while the code may still have errors.
+    if let Mode::Symbols = mode {
+        print!("{}", parser::symbols(&code).to_json());
+        return;
+    }
+
     // Pipeline: source -> AST -> (interpreter | C -> binary)
     let ast = parser::parse(&code).unwrap_or_else(|errors| {
         for e in &errors {
@@ -95,6 +104,7 @@ fn main() {
     match mode {
         Mode::Check => println!("[OK] No errors in '{}'", filename),
         Mode::Emit => print!("{}", codegen::generate_c(&ast)),
+        Mode::Symbols => unreachable!("handled before parsing"),
         Mode::Interpret => {
             let (stdin, stdout) = (io::stdin(), io::stdout());
             if let Err(e) = interpreter::run(&ast, &mut stdin.lock(), &mut stdout.lock()) {

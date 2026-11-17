@@ -6,7 +6,8 @@ Language support for [Meng](../../README.md) (`.meng`).
 
 - Syntax highlighting
 - Live errors from the real compiler (`meng check`), as you type, all at once and underlined at their column
-- Completion: keywords, types after `:`, functions (with argument snippets), variables in scope
+- Completion: keywords, types after `:`, built-ins, functions (with argument snippets), and the variables
+  usable at the cursor (block scopes of `if`/`while`, moved variables hidden), using `meng symbols`
 - Hover (variable types, function signatures) and signature help
 - Go to definition
 - Snippets: `fnc`, `if`, `ife`, `elif`, `set`, `setk`, `setr`, `borrow`, `copy`, `show`, `%`
@@ -29,4 +30,4 @@ Reinstall after changing the extension source.
 
 ## Known limitations
 
-- Completion does not know about `if`-block scope or moved variables.
+- Without a recent `meng` (with `meng symbols`), completion falls back to a simpler text index.
