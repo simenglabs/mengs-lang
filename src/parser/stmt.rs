@@ -50,6 +50,16 @@ pub fn parse_stmt(line: &str, scope: &mut Scope, no: usize) -> Result<Option<Stm
     Err(format!("unrecognized statement: `{}`{}", line, hint))
 }
 
+/// After a `set` failed (e.g. a type error in its value), still declare the
+/// variable if its name and type are readable, to avoid follow-up errors.
+pub fn declare_after_error(line: &str, scope: &mut Scope) {
+    let Some(rest) = line.strip_prefix("set ") else { return };
+    let decl = rest.split("<==").next().unwrap_or(rest).split('=').next().unwrap_or(rest);
+    if let Ok((name, ty, _)) = parse_typed_name(decl, "") {
+        let _ = scope.declare(&name, ty, Kind::Reuse);
+    }
+}
+
 /// Looks like a name (keywords included, so they get a clear error later).
 fn is_word(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')

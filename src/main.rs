@@ -25,6 +25,20 @@ fn print_usage() {
     println!("  meng check <file.meng>      - Only check for errors (use `-` to read stdin)");
 }
 
+/// Print an error as `[ERROR] file:line:column: message`, followed by the
+/// source line and a caret under the column.
+fn report(filename: &str, code: &str, e: &parser::Diagnostic) {
+    let line = code.lines().nth(e.line - 1).unwrap_or("");
+    // Diagnostics count bytes; show characters (and keep tabs so the caret lines up).
+    let prefix: String = line.get(..e.column.saturating_sub(1)).unwrap_or(line).chars().collect();
+    let column = prefix.chars().count() + 1;
+    eprintln!("[ERROR] {}:{}:{}: {}", filename, e.line, column, e.message);
+    let pad: String = prefix.chars().map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
+    let number = e.line.to_string();
+    eprintln!("  {} | {}", number, line);
+    eprintln!("  {} | {}^", " ".repeat(number.len()), pad);
+}
+
 fn read_source(filename: &str) -> io::Result<String> {
     if filename == "-" {
         let mut code = String::new();
@@ -65,8 +79,13 @@ fn main() {
     });
 
     // Pipeline: source -> AST -> (interpreter | C -> binary)
-    let ast = parser::parse(&code).unwrap_or_else(|e| {
-        eprintln!("[ERROR] {}: {}", filename, e);
+    let ast = parser::parse(&code).unwrap_or_else(|errors| {
+        for e in &errors {
+            report(filename, &code, e);
+        }
+        if errors.len() > 1 {
+            eprintln!("[FAILED] {} errors in '{}'", errors.len(), filename);
+        }
         process::exit(1);
     });
 

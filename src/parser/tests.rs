@@ -6,21 +6,19 @@ use crate::ast::Stmt;
 
 /// The source must parse without errors.
 fn ok(src: &str) {
-    if let Err(e) = parse(src) {
-        panic!("expected success, got error: {e}\n--- source ---\n{src}");
+    if let Err(errors) = parse(src) {
+        panic!("expected success, got errors: {errors:?}\n--- source ---\n{src}");
     }
 }
 
-/// The source must fail on `line` with a message containing `fragment`.
+/// The source must report an error on `line` with a message containing `fragment`.
 fn err(src: &str, line: usize, fragment: &str) {
     match parse(src) {
         Ok(_) => panic!("expected an error containing `{fragment}`, but it parsed\n--- source ---\n{src}"),
-        Err(e) => {
-            let prefix = format!("Line {line}: ");
-            assert!(
-                e.starts_with(&prefix) && e.contains(fragment),
-                "expected `{prefix}...{fragment}...`, got `{e}`\n--- source ---\n{src}"
-            );
+        Err(errors) => {
+            let found = errors.iter().any(|e| e.line == line && e.message.contains(fragment));
+            let all: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            assert!(found, "expected `Line {line}: ...{fragment}...`, got {all:#?}\n--- source ---\n{src}");
         }
     }
 }
@@ -394,7 +392,7 @@ fn functions_are_separated_from_main() {
 
 /// Parse `show(<expr>);` and return the expression.
 fn expr(src: &str) -> crate::ast::Expr {
-    let program = parse(&format!("show({src});")).unwrap_or_else(|e| panic!("`{src}`: {e}"));
+    let program = parse(&format!("show({src});")).unwrap_or_else(|e| panic!("`{src}`: {e:?}"));
     let Some(Stmt::Print(e)) = program.main.into_iter().next() else { panic!("expected show") };
     e
 }
@@ -663,7 +661,8 @@ fn bare_variable_argument_moves_inside_expressions_too() {
 
 #[test]
 fn function_header_syntax() {
-    err("fnc F(a: int)-> int ->\n<-;", 1, "invalid function syntax");
+    err("fnc F(a: int)-> int ->\n<-;", 1, "unrecognized statement: `int ->`");
+    err("fnc F(a: int) int ->\n<-;", 1, "invalid function syntax");
     err("show(1);\nfnc F()->\n<-;\nfnc F()->\n<-;", 4, "function `F` is already defined");
 }
 
@@ -776,4 +775,37 @@ fn arrays_follow_ownership_rules() {
     err("set xs: [int] = [1];\nset ys: [int] = xs;\npush(xs, 1);", 3, "variable `xs` was moved on line 2");
     err("set s: str = \"a\";\nset xs: [str] = [];\npush(xs, s);\nshow(s);", 4, "variable `s` was moved on line 3");
     ok("set s: str = \"a\";\nset xs: [str] = [s];\nshow(s);");
+}
+
+// ------------------------------------------------------------- error reporting
+
+#[test]
+fn every_error_is_reported_with_its_column() {
+    let src = "set age: int = \"x\";\nshow(age + 1);\nshow(nope);\n  set a: int = 1; show(b);\nshow(1)";
+    let errors = parse(src).unwrap_err();
+    let found: Vec<(usize, usize)> = errors.iter().map(|e| (e.line, e.column)).collect();
+    // Line 2 has no error: `age` stays declared after its failed `set`.
+    assert_eq!(found, vec![(1, 5), (3, 6), (4, 24), (5, 1)], "{errors:?}");
+}
+
+#[test]
+fn errors_inside_blocks_do_not_stop_parsing() {
+    let src = "fnc F(n: int): int ->\n    show(x);\n<-;\nif 1 ->\n    show(y);\n<-;\nshow(z);";
+    let lines: Vec<usize> = parse(src).unwrap_err().iter().map(|e| e.line).collect();
+    assert_eq!(lines, vec![1, 2, 4, 5, 7]);
+}
+
+#[test]
+fn several_statements_on_one_line() {
+    ok("set a: int = 1; set reuse b: int = 2; show(a + b);");
+    ok("if 1 < 2 -> show(\"yes\"); <- else -> show(\"no\"); <-;");
+    ok("set i: int = 0;\nwhile i < 3 -> show(i); i = i + 1; <-;");
+    ok("fnc F(): int -> return 1; <-;\nshow(F());");
+    err("set a: int = 1; show(a); show(b);", 1, "variable `b` is not declared");
+}
+
+#[test]
+fn comment_errors_have_a_column() {
+    let errors = parse("show(1);\n  % never closed").unwrap_err();
+    assert_eq!((errors[0].line, errors[0].column), (2, 3));
 }

@@ -1,7 +1,8 @@
 //! Parser: turns Meng source code into a type-checked `Program`.
 //!
-//! - `mod.rs`      — line reader, blocks (`fnc`, `if`/`else`, `while`), `return`, program structure
+//! - `mod.rs`      — statement reader (collects every error), blocks (`fnc`, `if`/`else`, `while`), `return`, program structure
 //! - `comments.rs` — strips `% ... %` comments before parsing
+//! - `diagnostic.rs` — errors with line/column, splitting lines into statements
 //! - `stmt.rs`     — single-line statements (`set`, reassign, borrow, copy, `show`, calls) and function headers
 //! - `lexer.rs`    — tokens for expressions (numbers, strings, names, operators)
 //! - `expr.rs`     — expressions by precedence, type checks, calls, identifiers
@@ -10,6 +11,7 @@
 
 mod check;
 mod comments;
+mod diagnostic;
 mod expr;
 mod lexer;
 mod scope;
@@ -20,171 +22,223 @@ mod tests;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{Function, Program, Signature, Stmt, always_returns};
+use crate::ast::{Expr, Function, Program, Signature, Stmt, always_returns};
 use comments::strip_comments;
+pub use diagnostic::Diagnostic;
+use diagnostic::{Piece, diagnostic, split_pieces};
 use expr::{BUILTINS, parse_condition, parse_typed};
 use scope::{Access, Kind, Scope};
-use stmt::{check_assign, parse_fn_header, parse_stmt};
+use stmt::{check_assign, declare_after_error, parse_fn_header, parse_stmt};
 
-/// Parse source code into a `Program`.
-/// Unrecognized lines, syntax errors, type mismatches, undeclared or
-/// already-moved variables, and unknown functions are reported with a line number.
-pub fn parse(code: &str) -> Result<Program, String> {
-    let code = strip_comments(code)?;
-    let lines: Vec<(usize, &str)> = code.lines().enumerate().map(|(i, l)| (i + 1, l.trim())).collect();
-    let functions = Rc::new(collect_signatures(&lines)?);
-    Parser { lines, pos: 0, functions, current: None }.parse_program()
+/// Parse source code into a `Program`, or return every error found
+/// (unrecognized statements, syntax and type errors, ownership errors, ...).
+pub fn parse(code: &str) -> Result<Program, Vec<Diagnostic>> {
+    let code = strip_comments(code).map_err(|e| vec![e])?;
+    let pieces = split_pieces(&code);
+    let mut errors = Vec::new();
+    let (functions, headers) = collect_signatures(&pieces, &mut errors);
+    let mut parser = Parser { pieces, pos: 0, functions: Rc::new(functions), headers, current: None, errors };
+    let program = parser.parse_program();
+    let mut errors = parser.errors;
+    if errors.is_empty() {
+        return Ok(program);
+    }
+    errors.sort_by_key(|e| (e.line, e.column));
+    errors.dedup();
+    Err(errors)
 }
 
 /// First pass: read every function header, so calls (and their return types)
 /// can be checked even when the function is defined further down.
-fn collect_signatures(lines: &[(usize, &str)]) -> Result<HashMap<String, Signature>, String> {
-    let mut functions = HashMap::new();
-    for &(no, line) in lines {
-        if let Some(header) = line.strip_prefix("fnc ") {
-            let sig = parse_fn_header(header).map_err(|e| at(no, e))?;
-            if BUILTINS.contains(&sig.name.as_str()) {
-                return Err(at(no, format!("`{}` is a built-in function and cannot be redefined", sig.name)));
+/// Returns the signatures by name, and by the index of their header piece.
+fn collect_signatures(
+    pieces: &[Piece],
+    errors: &mut Vec<Diagnostic>,
+) -> (HashMap<String, Signature>, HashMap<usize, Signature>) {
+    let (mut functions, mut headers) = (HashMap::new(), HashMap::new());
+    for (i, piece) in pieces.iter().enumerate() {
+        let Some(header) = piece.text.strip_prefix("fnc ") else { continue };
+        let sig = match parse_fn_header(header) {
+            Ok(sig) if BUILTINS.contains(&sig.name.as_str()) => {
+                Err(format!("`{}` is a built-in function and cannot be redefined", sig.name))
             }
-            if functions.contains_key(&sig.name) {
-                return Err(at(no, format!("function `{}` is already defined", sig.name)));
+            Ok(sig) if functions.contains_key(&sig.name) => Err(format!("function `{}` is already defined", sig.name)),
+            other => other,
+        };
+        match sig {
+            Ok(sig) => {
+                functions.insert(sig.name.clone(), sig.clone());
+                headers.insert(i, sig);
             }
-            functions.insert(sig.name.clone(), sig);
+            Err(e) => errors.push(diagnostic(*piece, e)),
         }
     }
-    Ok(functions)
-}
-
-/// Prefix an error message with its line number.
-fn at(line: usize, msg: impl Into<String>) -> String {
-    format!("Line {}: {}", line, msg.into())
+    (functions, headers)
 }
 
 /// How a block was closed.
 enum BlockEnd<'a> {
-    /// `<-;`
+    /// `<-;` (or the end of the file, already reported)
     End,
-    /// `<- else ->` (line number)
-    Else(usize),
-    /// `<- else if ... ->` (line number, condition)
-    ElseIf(usize, &'a str),
+    /// `<- else ->`
+    Else(Piece<'a>),
+    /// `<- else if ... ->` (with the condition)
+    ElseIf(Piece<'a>, &'a str),
 }
 
 /// Recognize a block terminator: `<-;`, `<- else ->`, or `<- else if ... ->`.
-fn parse_block_end(no: usize, line: &str) -> Result<Option<BlockEnd<'_>>, String> {
-    let Some(rest) = line.strip_prefix("<-").map(str::trim) else {
-        return Ok(None);
-    };
+fn parse_block_end(piece: Piece<'_>) -> Option<Result<BlockEnd<'_>, String>> {
+    let rest = piece.text.strip_prefix("<-")?.trim();
     if rest == ";" {
-        return Ok(Some(BlockEnd::End));
+        return Some(Ok(BlockEnd::End));
     }
     if let Some(rest) = rest.strip_prefix("else").map(str::trim) {
         if rest == "->" {
-            return Ok(Some(BlockEnd::Else(no)));
+            return Some(Ok(BlockEnd::Else(piece)));
         }
         if let Some(cond) = rest.strip_prefix("if ") {
-            return Ok(Some(BlockEnd::ElseIf(no, cond)));
+            return Some(Ok(BlockEnd::ElseIf(piece, cond)));
         }
     }
-    Err(at(no, "invalid block terminator, use `<-;`, `<- else ->`, or `<- else if a < b ->`"))
+    Some(Err("invalid block terminator, use `<-;`, `<- else ->`, or `<- else if a < b ->`".into()))
 }
 
 struct Parser<'a> {
-    lines: Vec<(usize, &'a str)>,
+    pieces: Vec<Piece<'a>>,
     pos: usize,
     functions: Rc<HashMap<String, Signature>>,
+    /// Valid function headers, by piece index.
+    headers: HashMap<usize, Signature>,
     /// The function being parsed (for `return`), `None` at the top level.
     current: Option<Signature>,
+    errors: Vec<Diagnostic>,
 }
 
 impl<'a> Parser<'a> {
-    fn next_line(&mut self) -> Option<(usize, &'a str)> {
-        let line = self.lines.get(self.pos).copied();
+    fn next_piece(&mut self) -> Option<Piece<'a>> {
+        let piece = self.pieces.get(self.pos).copied();
         self.pos += 1;
-        line
+        piece
     }
 
-    fn parse_program(mut self) -> Result<Program, String> {
+    fn error(&mut self, piece: Piece, message: impl Into<String>) {
+        self.errors.push(diagnostic(piece, message.into()));
+    }
+
+    /// An error on a given line (e.g. where a variable was moved inside a loop).
+    fn error_on_line(&mut self, line: usize, fallback: Piece, message: String) {
+        let piece = self.pieces.iter().find(|p| p.line == line).copied().unwrap_or(fallback);
+        self.error(piece, message);
+    }
+
+    fn parse_program(&mut self) -> Program {
         let mut program = Program::default();
         let mut main_scope = Scope::new(self.functions.clone());
 
-        while let Some((no, line)) = self.next_line() {
-            if let Some(header) = line.strip_prefix("fnc ") {
-                let name = header.split('(').next().unwrap_or_default().trim();
-                let sig = self.functions[name].clone(); // every header was read by the first pass
-                program.functions.push(self.parse_function(no, sig)?);
-            } else if parse_block_end(no, line)?.is_some() {
-                return Err(at(no, "block terminator without a matching `fnc`/`if`/`while`"));
-            } else {
-                program.main.extend(self.parse_stmt_line(no, line, &mut main_scope)?);
+        while let Some(piece) = self.next_piece() {
+            if piece.text.starts_with("fnc ") {
+                match self.headers.get(&(self.pos - 1)).cloned() {
+                    Some(sig) => program.functions.push(self.parse_function(piece, sig)),
+                    None => self.skip_block(), // header error already reported
+                }
+            } else if parse_block_end(piece).is_some() {
+                self.error(piece, "block terminator without a matching `fnc`/`if`/`while`");
+            } else if let Some(stmt) = self.parse_stmt_line(piece, &mut main_scope) {
+                program.main.push(stmt);
             }
         }
-        Ok(program)
+        program
+    }
+
+    /// Skip the body of a block whose opener could not be parsed.
+    fn skip_block(&mut self) {
+        let mut depth = 1;
+        while let Some(piece) = self.next_piece() {
+            let text = piece.text;
+            if text.starts_with("<-") && !text.ends_with("->") {
+                depth -= 1;
+            } else if !text.starts_with("<-") && text.ends_with("->") {
+                depth += 1;
+            }
+            if depth == 0 {
+                return;
+            }
+        }
     }
 
     /// `fnc Name(params)[: type] ->` followed by its body up to `<-;`.
-    fn parse_function(&mut self, no: usize, sig: Signature) -> Result<Function, String> {
+    fn parse_function(&mut self, opener: Piece<'a>, sig: Signature) -> Function {
         let mut scope = Scope::new(self.functions.clone());
         for p in &sig.params {
             let kind = if p.keep { Kind::Keep } else if p.reuse { Kind::Reuse } else { Kind::Owned };
-            scope.declare(&p.name, p.ty, kind).map_err(|e| at(no, e))?;
+            if let Err(e) = scope.declare(&p.name, p.ty, kind) {
+                self.error(opener, e);
+            }
         }
         self.current = Some(sig.clone());
-        let block = self.parse_block(no, &format!("function `{}`", sig.name), &mut scope);
+        let (body, end) = self.parse_block(opener, &format!("function `{}`", sig.name), &mut scope);
         self.current = None;
-        let (body, end) = block?;
-        if let BlockEnd::Else(n) | BlockEnd::ElseIf(n, _) = end {
-            return Err(at(n, "`else` without `if`"));
+        if let BlockEnd::Else(p) | BlockEnd::ElseIf(p, _) = end {
+            self.error(p, "`else` without `if`");
         }
         if let Some(ty) = sig.ret {
             if !always_returns(&body) {
-                return Err(at(
-                    no,
-                    format!("function `{}` must return {} value on every path (missing `return`)", sig.name, ty.with_article()),
-                ));
+                let msg = format!("function `{}` must return {} value on every path (missing `return`)", sig.name, ty.with_article());
+                self.error(opener, msg);
             }
         }
         let Signature { name, params, ret } = sig;
-        Ok(Function { name, params, ret, body })
+        Function { name, params, ret, body }
     }
 
-    /// Read statements until a block terminator (function body, `if`, or `else`).
-    fn parse_block(
-        &mut self,
-        opener: usize,
-        what: &str,
-        scope: &mut Scope,
-    ) -> Result<(Vec<Stmt>, BlockEnd<'a>), String> {
+    /// Read statements until a block terminator (function body, `if`, `else`, or `while`).
+    fn parse_block(&mut self, opener: Piece<'a>, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd<'a>) {
         let mut body = Vec::new();
-        while let Some((no, line)) = self.next_line() {
-            if let Some(end) = parse_block_end(no, line)? {
-                return Ok((body, end));
+        while let Some(piece) = self.next_piece() {
+            match parse_block_end(piece) {
+                Some(Ok(end)) => return (body, end),
+                Some(Err(e)) => {
+                    self.error(piece, e);
+                    return (body, BlockEnd::End);
+                }
+                None => {}
             }
-            if line.starts_with("fnc ") {
-                return Err(at(no, "functions can only be defined at the top level"));
+            if piece.text.starts_with("fnc ") {
+                self.error(piece, "functions can only be defined at the top level (is a `<-;` missing above?)");
+                self.skip_block();
+                continue;
             }
-            body.extend(self.parse_stmt_line(no, line, scope)?);
+            body.extend(self.parse_stmt_line(piece, scope));
         }
-        Err(at(opener, format!("{} is not closed with `<-;`", what)))
+        self.error(opener, format!("{} is not closed with `<-;`", what));
+        (body, BlockEnd::End)
+    }
+
+    /// A condition; on error, it is reported and replaced by `true` so the block still parses.
+    fn condition(&mut self, piece: Piece<'a>, cond: &str, scope: &mut Scope) -> Expr {
+        parse_condition(cond, scope, piece.line).unwrap_or_else(|e| {
+            self.error(piece, e);
+            Expr::Bool(true)
+        })
     }
 
     /// `if <condition> ->` together with its `else if` / `else` chain.
-    fn parse_if(&mut self, no: usize, cond: &str, scope: &mut Scope) -> Result<Stmt, String> {
-        let cond = parse_condition(cond, scope, no).map_err(|e| at(no, e))?;
+    fn parse_if(&mut self, opener: Piece<'a>, cond: &str, scope: &mut Scope) -> Stmt {
+        let cond = self.condition(opener, cond, scope);
 
         // Each branch gets its own copy of the scope: variables declared inside
         // a block are not visible outside it.
         let mut then_scope = scope.clone();
-        let (body, end) = self.parse_block(no, "`if` block", &mut then_scope)?;
+        let (body, end) = self.parse_block(opener, "`if` block", &mut then_scope);
 
         let mut else_scope = scope.clone();
         let else_body = match end {
             BlockEnd::End => Vec::new(),
-            BlockEnd::ElseIf(n, cond) => vec![self.parse_if(n, cond, &mut else_scope)?],
-            BlockEnd::Else(n) => {
-                let (body, end) = self.parse_block(n, "`else` block", &mut else_scope)?;
-                if let BlockEnd::Else(m) | BlockEnd::ElseIf(m, _) = end {
-                    return Err(at(m, "`else` was already used, close the block with `<-;`"));
+            BlockEnd::ElseIf(p, cond) => vec![self.parse_if(p, cond, &mut else_scope)],
+            BlockEnd::Else(p) => {
+                let (body, end) = self.parse_block(p, "`else` block", &mut else_scope);
+                if let BlockEnd::Else(q) | BlockEnd::ElseIf(q, _) = end {
+                    self.error(q, "`else` was already used, close the block with `<-;`");
                 }
                 body
             }
@@ -195,26 +249,28 @@ impl<'a> Parser<'a> {
         let then_state = (!always_returns(&body)).then_some(&then_scope);
         let else_state = (!always_returns(&else_body)).then_some(&else_scope);
         scope.merge_branches(then_state, else_state);
-        Ok(Stmt::If { cond, body, else_body })
+        Stmt::If { cond, body, else_body }
     }
 
     /// `while <condition> ->` and its body.
-    fn parse_while(&mut self, no: usize, cond: &str, scope: &mut Scope) -> Result<Stmt, String> {
-        let cond = parse_condition(cond, scope, no).map_err(|e| at(no, e))?;
+    fn parse_while(&mut self, opener: Piece<'a>, cond: &str, scope: &mut Scope) -> Stmt {
+        let cond = self.condition(opener, cond, scope);
         let mut body_scope = scope.clone();
-        let (body, end) = self.parse_block(no, "`while` loop", &mut body_scope)?;
-        if let BlockEnd::Else(n) | BlockEnd::ElseIf(n, _) = end {
-            return Err(at(n, "`else` without `if`"));
+        let (body, end) = self.parse_block(opener, "`while` loop", &mut body_scope);
+        if let BlockEnd::Else(p) | BlockEnd::ElseIf(p, _) = end {
+            self.error(p, "`else` without `if`");
         }
         // The body may run again: it must not leave outside variables moved.
         if !always_returns(&body) {
-            scope.check_loop(&body_scope).map_err(|(line, e)| at(line, e))?;
+            if let Err((line, e)) = scope.check_loop(&body_scope) {
+                self.error_on_line(line, opener, e);
+            }
         }
-        Ok(Stmt::While { cond, body })
+        Stmt::While { cond, body }
     }
 
     /// `return;` or `return value;` inside a function.
-    fn parse_return(&mut self, no: usize, value: &str, scope: &mut Scope) -> Result<Stmt, String> {
+    fn parse_return(&self, line: usize, value: &str, scope: &mut Scope) -> Result<Stmt, String> {
         let Some(sig) = &self.current else {
             return Err("`return` can only be used inside a function".into());
         };
@@ -223,25 +279,33 @@ impl<'a> Parser<'a> {
             ("", Some(ty)) => Err(format!("function `{}` must return {} value", sig.name, ty.with_article())),
             (_, None) => Err(format!("function `{}` has no return type, so use `return;` without a value", sig.name)),
             (value, Some(ty)) => {
-                let expr = parse_typed(value, scope, no, Access::Move, ty)?;
+                let expr = parse_typed(value, scope, line, Access::Move, ty)?;
                 check_assign(ty, &expr, &format!("return value of `{}`", sig.name))?;
                 Ok(Stmt::Return(Some(expr)))
             }
         }
     }
 
-    fn parse_stmt_line(&mut self, no: usize, line: &str, scope: &mut Scope) -> Result<Option<Stmt>, String> {
-        if let Some(cond) = line.strip_prefix("if ") {
-            return self.parse_if(no, cond, scope).map(Some);
+    /// One statement. Errors are recorded and the statement is skipped.
+    fn parse_stmt_line(&mut self, piece: Piece<'a>, scope: &mut Scope) -> Option<Stmt> {
+        let text = piece.text;
+        if let Some(cond) = text.strip_prefix("if ") {
+            return Some(self.parse_if(piece, cond, scope));
         }
-        if let Some(cond) = line.strip_prefix("while ") {
-            return self.parse_while(no, cond, scope).map(Some);
+        if let Some(cond) = text.strip_prefix("while ") {
+            return Some(self.parse_while(piece, cond, scope));
         }
-        if let Some(value) = line.strip_prefix("return").and_then(|s| s.strip_suffix(';')) {
-            if value.is_empty() || value.starts_with(' ') {
-                return self.parse_return(no, value, scope).map(Some).map_err(|e| at(no, e));
+        let result = match text.strip_prefix("return").and_then(|s| s.strip_suffix(';')) {
+            Some(value) if value.is_empty() || value.starts_with(' ') => {
+                self.parse_return(piece.line, value, scope).map(Some)
             }
-        }
-        parse_stmt(line, scope, no).map_err(|e| at(no, e))
+            _ => parse_stmt(text, scope, piece.line),
+        };
+        result.unwrap_or_else(|e| {
+            self.error(piece, e);
+            // Keep a failed `set`'s variable known, so later lines don't report it as undeclared.
+            declare_after_error(text, scope);
+            None
+        })
     }
 }

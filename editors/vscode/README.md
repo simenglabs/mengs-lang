@@ -5,7 +5,7 @@ Language support for [Meng](../../README.md) (`.meng`).
 ## Features
 
 - Syntax highlighting
-- Live errors from the real compiler (`meng check`), as you type
+- Live errors from the real compiler (`meng check`), as you type, all at once and underlined at their column
 - Completion: keywords, types after `:`, functions (with argument snippets), variables in scope
 - Hover (variable types, function signatures) and signature help
 - Go to definition
@@ -29,5 +29,4 @@ Reinstall after changing the extension source.
 
 ## Known limitations
 
-- Only the first error is shown (the compiler stops at the first error).
 - Completion does not know about `if`-block scope or moved variables.

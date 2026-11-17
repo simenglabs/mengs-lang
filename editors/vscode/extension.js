@@ -150,11 +150,15 @@ function checkDocument(document, collection) {
 
   child.on('close', () => {
     const diagnostics = [];
-    for (const m of stderr.matchAll(/Line (\d+): (.*)/g)) {
+    // `[ERROR] -:line:column: message` (one per error; snippet lines are skipped).
+    for (const m of stderr.matchAll(/^\[ERROR\] .*?:(\d+):(\d+): (.*)$/gm)) {
       const line = Math.min(Number(m[1]) - 1, document.lineCount - 1);
-      const text = document.lineAt(line);
-      const range = new vscode.Range(line, text.firstNonWhitespaceCharacterIndex, line, text.text.length);
-      const diagnostic = new vscode.Diagnostic(range, m[2], vscode.DiagnosticSeverity.Error);
+      const text = document.lineAt(line).text;
+      const column = Math.min(Number(m[2]) - 1, text.length);
+      // Underline the word at the column (or the rest of the line).
+      const word = document.getWordRangeAtPosition(new vscode.Position(line, column), /[A-Za-z_][A-Za-z0-9_]*|\S+/);
+      const range = word || new vscode.Range(line, column, line, text.length);
+      const diagnostic = new vscode.Diagnostic(range, m[3], vscode.DiagnosticSeverity.Error);
       diagnostic.source = 'meng';
       diagnostics.push(diagnostic);
     }
