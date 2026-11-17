@@ -9,12 +9,14 @@
 //! - `scope.rs`    — variable tracking (types, ownership: move / reuse / borrow / reassign)
 //! - `check.rs`    — function call checks (argument count/types, defaults)
 //! - `symbols.rs`  — functions, variables, and ownership events for editors (`meng symbols`)
+//! - `modules.rs`  — `use "file.meng";`: loading imported files
 
 mod check;
 mod comments;
 mod diagnostic;
 mod expr;
 mod lexer;
+mod modules;
 mod scope;
 mod stmt;
 mod symbols;
@@ -32,21 +34,30 @@ use diagnostic::{Piece, diagnostic, split_pieces};
 use expr::{BUILTINS, parse_condition, parse_typed};
 use scope::{Access, Kind, Scope};
 use stmt::{check_assign, declare_after_error, parse_fn_header, parse_stmt};
+pub use modules::{SourceError, parse_file, symbols_file};
 pub use symbols::Symbols;
 use symbols::{FunctionSymbol, VariableSymbol};
 
-/// Parse source code into a `Program`, or return every error found
-/// (unrecognized statements, syntax and type errors, ownership errors, ...).
+/// Functions visible to a file through its `use` imports: name -> (signature, file).
+pub type Imported = HashMap<String, (Signature, String)>;
+
+/// Parse a single source (no imports) into a `Program`, or return every error
+/// found (unrecognized statements, syntax and type errors, ownership errors, ...).
+/// Files with `use` go through `parse_file`.
+#[cfg(test)]
 pub fn parse(code: &str) -> Result<Program, Vec<Diagnostic>> {
-    analyze(code).0
+    analyze(code, &Imported::new(), false).0
 }
 
-/// Symbols for editor tooling. Works on code with errors too.
+/// Symbols of a single source, for tests.
+#[cfg(test)]
 pub fn symbols(code: &str) -> Symbols {
-    analyze(code).1
+    analyze(code, &Imported::new(), false).1
 }
 
-fn analyze(code: &str) -> (Result<Program, Vec<Diagnostic>>, Symbols) {
+/// Parse one file, given the functions it imports. A `library` (an imported
+/// file) may only contain functions and `use`.
+fn analyze(code: &str, imported: &Imported, library: bool) -> (Result<Program, Vec<Diagnostic>>, Symbols) {
     let code = match strip_comments(code) {
         Ok(code) => code,
         Err(e) => return (Err(vec![e]), Symbols::default()),
@@ -54,8 +65,12 @@ fn analyze(code: &str) -> (Result<Program, Vec<Diagnostic>>, Symbols) {
     let pieces = split_pieces(&code);
     let last_line = code.lines().count().max(1);
     let mut errors = Vec::new();
-    let (functions, headers) = collect_signatures(&pieces, &mut errors);
+    let (mut functions, headers) = collect_signatures(&pieces, imported, &mut errors);
+    for (name, (sig, _)) in imported {
+        functions.entry(name.clone()).or_insert_with(|| sig.clone());
+    }
     let mut parser = Parser {
+        library,
         pieces,
         pos: 0,
         functions: Rc::new(functions),
@@ -84,6 +99,7 @@ fn analyze(code: &str) -> (Result<Program, Vec<Diagnostic>>, Symbols) {
 /// Returns the signatures by name, and by the index of their header piece.
 fn collect_signatures(
     pieces: &[Piece],
+    imported: &Imported,
     errors: &mut Vec<Diagnostic>,
 ) -> (HashMap<String, Signature>, HashMap<usize, Signature>) {
     let (mut functions, mut headers) = (HashMap::new(), HashMap::new());
@@ -94,6 +110,9 @@ fn collect_signatures(
                 Err(format!("`{}` is a built-in function and cannot be redefined", sig.name))
             }
             Ok(sig) if functions.contains_key(&sig.name) => Err(format!("function `{}` is already defined", sig.name)),
+            Ok(sig) if imported.contains_key(&sig.name) => {
+                Err(format!("function `{}` is already defined in `{}`", sig.name, imported[&sig.name].1))
+            }
             other => other,
         };
         match sig {
@@ -135,6 +154,8 @@ fn parse_block_end(piece: Piece<'_>) -> Option<Result<BlockEnd<'_>, String>> {
 }
 
 struct Parser<'a> {
+    /// An imported file: only functions and `use` at the top level.
+    library: bool,
     pieces: Vec<Piece<'a>>,
     pos: usize,
     functions: Rc<HashMap<String, Signature>>,
@@ -202,6 +223,16 @@ impl<'a> Parser<'a> {
                 }
             } else if parse_block_end(piece).is_some() {
                 self.error(piece, "block terminator without a matching `fnc`/`if`/`while`");
+            } else if piece.text.starts_with("use ") {
+                // Loaded by `modules.rs`; only the syntax is checked here.
+                if let Err(e) = modules::parse_use(piece.text) {
+                    self.error(piece, e);
+                }
+            } else if self.library {
+                self.error(piece, "an imported file can only contain functions and `use`");
+                if piece.text.ends_with("->") {
+                    self.skip_block();
+                }
             } else if let Some(stmt) = self.parse_stmt_line(piece, &mut main_scope) {
                 program.main.push(stmt);
             }
@@ -244,7 +275,7 @@ impl<'a> Parser<'a> {
         self.close_symbols(end_line);
         self.current = None;
         let column = diagnostic(opener, format!("`{}`", sig.name)).column;
-        self.symbols.functions.push(FunctionSymbol { sig: sig.clone(), line: opener.line, column, end: end_line });
+        self.symbols.functions.push(FunctionSymbol { sig: sig.clone(), file: None, line: opener.line, column, end: end_line });
         if let BlockEnd::Else(p) | BlockEnd::ElseIf(p, _) = end {
             self.error(p, "`else` without `if`");
         }
@@ -277,6 +308,10 @@ impl<'a> Parser<'a> {
                     return (body, BlockEnd::End);
                 }
                 None => {}
+            }
+            if piece.text.starts_with("use ") {
+                self.error(piece, "`use` is only allowed at the top level of a file");
+                continue;
             }
             if piece.text.starts_with("fnc ") {
                 self.error(piece, "functions can only be defined at the top level (is a `<-;` missing above?)");
@@ -385,8 +420,13 @@ impl<'a> Parser<'a> {
             };
             self.declare_symbol(piece, name, *ty, kind);
         }
+        let is_return = text.starts_with("return") && text.ends_with(';');
         result.unwrap_or_else(|e| {
             self.error(piece, e);
+            // A broken `return` still ends its path (no extra "missing `return`" error).
+            if is_return {
+                return Some(Stmt::Return(None));
+            }
             // Keep a failed `set`'s variable known, so later lines don't report it as undeclared.
             declare_after_error(text, scope);
             None

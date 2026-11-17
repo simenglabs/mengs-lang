@@ -23,8 +23,9 @@ function compilerPath() {
   return configured;
 }
 
+/** The document's folder: `use "x.meng";` resolves from there. */
 function workingDir(document) {
-  return vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath || path.dirname(document.uri.fsPath);
+  return path.dirname(document.uri.fsPath);
 }
 
 // ---------------------------------------------------------------- symbols
@@ -160,7 +161,8 @@ const definitionProvider = {
       visibleVariables(index, position.line, true).find((v) => v.name === word) ||
       index.functions.find((f) => f.name === word);
     if (!target) return null;
-    return new vscode.Location(document.uri, new vscode.Position(target.line, Math.max(target.column, 0)));
+    const uri = target.file ? vscode.Uri.file(path.resolve(workingDir(document), target.file)) : document.uri;
+    return new vscode.Location(uri, new vscode.Position(target.line, Math.max(target.column, 0)));
   },
 };
 
@@ -187,8 +189,9 @@ function checkDocument(document, collection) {
 
   child.on('close', () => {
     const diagnostics = [];
-    // `[ERROR] -:line:column: message` (one per error; snippet lines are skipped).
-    for (const m of stderr.matchAll(/^\[ERROR\] .*?:(\d+):(\d+): (.*)$/gm)) {
+    // `[ERROR] -:line:column: message` for this document (errors inside imported
+    // files are named after those files; their `use` line gets its own error).
+    for (const m of stderr.matchAll(/^\[ERROR\] -:(\d+):(\d+): (.*)$/gm)) {
       const line = Math.min(Number(m[1]) - 1, document.lineCount - 1);
       const text = document.lineAt(line).text;
       const column = Math.min(Number(m[2]) - 1, text.length);

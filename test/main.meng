@@ -3,6 +3,8 @@
   Comments start and end with a percent sign and can span multiple lines.
 %
 
+use "greetings.meng";   % functions from another file %
+
 fnc Example(title: str)->
     show(title);
     
@@ -214,3 +216,5 @@ set pets: [str] = [];
 push(pets, "cat");
 push(pets, "kitten");
 show(pets[1] + " is item 1 of " + str(len(pets)));
+
+show(Hello("imports"));

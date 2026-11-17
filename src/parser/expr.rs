@@ -23,7 +23,7 @@ use super::lexer::{Token, tokenize};
 use super::scope::{Access, Scope};
 
 const KEYWORDS: &[&str] = &[
-    "set", "keep", "reuse", "show", "fnc", "if", "else", "while", "return", "true", "false", "and", "or",
+    "set", "keep", "reuse", "show", "fnc", "use", "if", "else", "while", "return", "true", "false", "and", "or",
     "not", "mod",
 ];
 

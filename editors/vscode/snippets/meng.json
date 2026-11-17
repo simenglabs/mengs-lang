@@ -19,6 +19,11 @@
     "body": ["while ${1:a} ${2|<,>,<=,>=,=,!=|} ${3:b} ->", "\t$0", "<-;"],
     "description": "while loop"
   },
+  "Use": {
+    "prefix": "use",
+    "body": ["use \"${1:file}.meng\";"],
+    "description": "Import the functions of another file"
+  },
   "If": {
     "prefix": "if",
     "body": ["if ${1:a} ${2|=,!=,<,>,<=,>=|} ${3:b} ->", "\t$0", "<-;"],

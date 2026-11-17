@@ -31,8 +31,9 @@ fn print_usage() {
 
 /// Print an error as `[ERROR] file:line:column: message`, followed by the
 /// source line and a caret under the column.
-fn report(filename: &str, code: &str, e: &parser::Diagnostic) {
-    let line = code.lines().nth(e.line - 1).unwrap_or("");
+fn report(error: &parser::SourceError) {
+    let (filename, e) = (&error.file, &error.diagnostic);
+    let line = error.code.lines().nth(e.line - 1).unwrap_or("");
     // Diagnostics count bytes; show characters (and keep tabs so the caret lines up).
     let prefix: String = line.get(..e.column.saturating_sub(1)).unwrap_or(line).chars().collect();
     let column = prefix.chars().count() + 1;
@@ -84,16 +85,22 @@ fn main() {
         process::exit(1);
     });
 
+    // `use "x.meng";` resolves from the file's folder (the current folder for stdin).
+    let dir = match Path::new(filename).parent() {
+        Some(p) if filename != "-" && !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => Path::new(".").to_path_buf(),
+    };
+
     // Editors ask for symbols while the code may still have errors.
     if let Mode::Symbols = mode {
-        print!("{}", parser::symbols(&code).to_json());
+        print!("{}", parser::symbols_file(filename, &code, &dir).to_json());
         return;
     }
 
-    // Pipeline: source -> AST -> (interpreter | C -> binary)
-    let ast = parser::parse(&code).unwrap_or_else(|errors| {
+    // Pipeline: source (+ imports) -> AST -> (interpreter | C -> binary)
+    let ast = parser::parse_file(filename, &code, &dir).unwrap_or_else(|errors| {
         for e in &errors {
-            report(filename, &code, e);
+            report(e);
         }
         if errors.len() > 1 {
             eprintln!("[FAILED] {} errors in '{}'", errors.len(), filename);

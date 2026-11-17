@@ -3,7 +3,7 @@
 // Type checking and errors come from the real compiler (`meng check`); this file
 // only powers completion, hover, signature help, and go-to-definition.
 
-const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'if', 'else', 'while', 'return', 'and', 'or', 'not', 'mod'];
+const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'use', 'if', 'else', 'while', 'return', 'and', 'or', 'not', 'mod'];
 const TYPES = ['str', 'int', 'float', 'bool'];
 const CONSTANTS = ['true', 'false'];
 const BUILTINS = [
@@ -156,6 +156,7 @@ function indexSymbols(text) {
 function fromCompiler(data) {
   const functions = data.functions.map((f) => ({
     name: f.name,
+    file: f.file || null, // imported from another file
     params: f.params,
     line: f.line - 1,
     column: f.column - 1,
@@ -177,7 +178,7 @@ function fromCompiler(data) {
       .map((e) => ({ line: e.line - 1, moved: e.moved })),
   }));
   function scopeAt(line) {
-    const f = functions.find((fn) => line >= fn.line && line <= fn.endLine);
+    const f = functions.find((fn) => !fn.file && line >= fn.line && line <= fn.endLine);
     return f ? f.name : null;
   }
   return { functions, variables, scopeAt, precise: true };

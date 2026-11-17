@@ -15,6 +15,8 @@ pub struct Symbols {
 #[derive(Debug)]
 pub struct FunctionSymbol {
     pub sig: Signature,
+    /// Imported functions: the file they come from.
+    pub file: Option<String>,
     pub line: usize,
     pub column: usize,
     /// Line of the closing `<-;`.
@@ -80,8 +82,9 @@ fn function_json(f: &FunctionSymbol) -> String {
         })
         .collect();
     format!(
-        r#"{{"name":{},"line":{},"column":{},"end":{},"signature":{},"returns":{},"params":[{}]}}"#,
+        r#"{{"name":{},"file":{},"line":{},"column":{},"end":{},"signature":{},"returns":{},"params":[{}]}}"#,
         quote(&f.sig.name),
+        f.file.as_deref().map_or("null".to_string(), quote),
         f.line,
         f.column,
         f.end,

@@ -1,0 +1,5 @@
+% Imported by main.meng with: use "greetings.meng";   %
+% An imported file can only contain functions (and use). %
+fnc Hello(name: str): str ->
+    return "Hello, " + name + "!";
+<-;
