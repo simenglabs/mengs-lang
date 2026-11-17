@@ -3,7 +3,7 @@
 // Type checking and errors come from the real compiler (`meng check`); this file
 // only powers completion, hover, signature help, and go-to-definition.
 
-const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'if', 'else'];
+const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'if', 'else', 'and', 'or', 'not', 'mod'];
 const TYPES = ['str', 'int', 'float', 'bool'];
 const CONSTANTS = ['true', 'false'];
 

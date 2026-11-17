@@ -1,0 +1,9 @@
+Generated with the built-in image_gen tool.
+
+Use case: logo-brand.
+Asset type: primary logo for the Meng programming language project, called mengslang by its creator. The name comes from Indonesian "meng", a cat / the sound of a cat meowing.
+Primary request: Create one polished, distinctive flat logo on a genuinely transparent background. A minimal geometric cat head with pointed ears, using opposing code angle-bracket shapes as the cheek/whisker structure and a small expressive open mouth suggesting a soft meow. Friendly, clever developer-tool identity, restrained and memorable, legible at small sizes. Pair the icon above a carefully typeset lowercase wordmark.
+Text (verbatim): "mengslang" — spell exactly m e n g s l a n g. No other text.
+Style: crisp vector-like graphic, bold clean contours, balanced geometry, no fine details. Harmonious flat colors with good contrast, professional open-source programming-language branding.
+Composition: single centered vertical logo lockup, icon larger than wordmark, comfortable transparent margins, suitable for README and repository avatar.
+Constraints: true transparent alpha background; no background rectangle, no checkerboard drawn into the image; no mockup, no paper, no photographic textures, no drop shadows, no gradients, no 3D effects, no watermark. Deliver the actual logo only.

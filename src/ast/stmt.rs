@@ -1,4 +1,4 @@
-use super::{Cond, Expr, Type};
+use super::{Expr, Type};
 
 /// A single statement in the program, a function body, or an `if` block.
 #[derive(Debug, PartialEq)]
@@ -9,7 +9,7 @@ pub enum Stmt {
     Print(Expr),
     Call { name: String, args: Vec<Expr> },
     /// `else if` is stored as an `else_body` containing a single `If`.
-    If { cond: Cond, body: Vec<Stmt>, else_body: Vec<Stmt> },
+    If { cond: Expr, body: Vec<Stmt>, else_body: Vec<Stmt> },
 }
 
 /// Function parameter: `[keep|reuse] name: type [= literal]`.

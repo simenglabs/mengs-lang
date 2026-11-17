@@ -1,5 +1,5 @@
 use super::generate_c;
-use crate::ast::{CmpOp, Cond, Expr, Function, Param, Program, Stmt, Type};
+use crate::ast::{BinOp, Expr, Function, Param, Program, Stmt, Type};
 
 fn main_only(stmts: Vec<Stmt>) -> Program {
     Program { functions: vec![], main: stmts }
@@ -17,8 +17,8 @@ fn set(name: &str, ty: Type, keep: bool, value: Expr) -> Stmt {
     Stmt::Set { name: name.into(), ty, keep, value }
 }
 
-fn cmp(lhs: Expr, op: CmpOp, rhs: Expr) -> Cond {
-    Cond::Compare { lhs, op, rhs }
+fn bin(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
+    Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
 }
 
 #[test]
@@ -91,10 +91,10 @@ fn generates_functions_with_defaults() {
 #[test]
 fn generates_if_else_chain() {
     let c = generate_c(&main_only(vec![Stmt::If {
-        cond: cmp(var("a", Type::Int), CmpOp::Lt, Expr::Int(0)),
+        cond: bin(var("a", Type::Int), BinOp::Lt, Expr::Int(0)),
         body: vec![print("negative")],
         else_body: vec![Stmt::If {
-            cond: cmp(var("a", Type::Int), CmpOp::Eq, Expr::Int(0)),
+            cond: bin(var("a", Type::Int), BinOp::Eq, Expr::Int(0)),
             body: vec![print("zero")],
             else_body: vec![print("positive")],
         }],
@@ -108,12 +108,45 @@ fn generates_if_else_chain() {
 fn string_and_bool_conditions() {
     let c = generate_c(&main_only(vec![
         Stmt::If {
-            cond: cmp(var("s", Type::Str), CmpOp::Eq, Expr::Str("x".into())),
+            cond: bin(var("s", Type::Str), BinOp::Eq, Expr::Str("x".into())),
             body: vec![],
             else_body: vec![],
         },
-        Stmt::If { cond: Cond::Bool(var("active", Type::Bool)), body: vec![], else_body: vec![] },
+        Stmt::If { cond: var("active", Type::Bool), body: vec![], else_body: vec![] },
     ]));
     assert!(c.contains("if (strcmp(v_s, \"x\") == 0) {\n    }\n"));
     assert!(c.contains("if (v_active) {\n    }\n"));
+}
+
+#[test]
+fn generates_operators_with_parentheses() {
+    let sum = bin(Expr::Int(1), BinOp::Add, bin(Expr::Int(2), BinOp::Mul, var("a", Type::Int)));
+    let cond = bin(
+        bin(var("a", Type::Int), BinOp::Gt, Expr::Int(0)),
+        BinOp::And,
+        Expr::Unary { op: crate::ast::UnaryOp::Not, expr: Box::new(var("b", Type::Bool)) },
+    );
+    let neg = Expr::Unary { op: crate::ast::UnaryOp::Neg, expr: Box::new(Expr::Int(-3)) };
+    let c = generate_c(&main_only(vec![
+        set("x", Type::Int, false, sum),
+        Stmt::If { cond, body: vec![], else_body: vec![] },
+        set("y", Type::Int, false, neg),
+    ]));
+    assert!(c.contains("long long v_x = 1LL + (2LL * v_a);"), "{c}");
+    assert!(c.contains("if ((v_a > 0LL) && (!v_b)) {"), "{c}");
+    assert!(c.contains("long long v_y = (- -3LL);"), "{c}");
+    assert!(!c.contains("meng_division_by_zero"), "helpers only when dividing");
+}
+
+#[test]
+fn division_uses_checked_helpers() {
+    let c = generate_c(&main_only(vec![
+        set("i", Type::Int, false, bin(var("a", Type::Int), BinOp::Div, Expr::Int(2))),
+        set("m", Type::Int, false, bin(var("a", Type::Int), BinOp::Mod, Expr::Int(2))),
+        set("f", Type::Float, false, bin(var("a", Type::Int), BinOp::Div, Expr::Float(2.0))),
+    ]));
+    assert!(c.contains("long long v_i = meng_div_int(v_a, 2LL);"), "{c}");
+    assert!(c.contains("long long v_m = meng_mod_int(v_a, 2LL);"), "{c}");
+    assert!(c.contains("double v_f = meng_div_float(v_a, 2.0);"), "{c}");
+    assert!(c.contains("static void meng_division_by_zero(void)"), "{c}");
 }

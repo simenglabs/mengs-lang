@@ -122,3 +122,20 @@ set country: str = "Indonesia";
 country ()=> country_copy;    % copy: an independent value %
 Greet(country, "original, moved into the function:");
 Greet(country_copy, "copy, still usable:");
+
+% Expressions: arithmetic, comparisons, and logic. Variables inside an %
+% expression are only read, so they can be used again afterwards.      %
+set keep price: int = 7;
+set keep qty: int = 3;
+set total: int = price * qty + 1;
+show(total);
+show(price / 2);           % int / int = int %
+show(price / 2.0);         % any float makes the result a float %
+show(price mod 2);         % remainder: the percent sign is taken by comments %
+show(-(price - 10) * 2);
+
+set big_order: bool = total > 20 and not (qty = 0);
+show(big_order);
+if price > 5 or qty > 10 ->
+    show("worth a discount");
+<-;

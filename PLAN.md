@@ -10,20 +10,20 @@ Every feature must:
 
 ---
 
-## Phase 0 — Safety net
+## Phase 0 — Safety net ✅
 | Item | Notes |
 |---|---|
 | First git commit | Before any refactor. |
 | Parser unit tests | Ownership (move, reuse, keep, borrow, copy, moves inside `if`), type errors, unrecognized lines. These protect the Phase 1 rewrite. |
 
-## Phase 1 — Real expressions
+## Phase 1 — Real expressions ✅
 Today an expression is a single literal or variable. Everything else in the
 roadmap (arithmetic, logic, return values, loops) needs real expressions.
 
 | Item | Notes |
 |---|---|
 | Tokenizer + expression parser | Replace string splitting in `parser/expr.rs` with tokens and precedence climbing. Statements stay line-based. |
-| Arithmetic `+ - * / %` | `int op int → int`, any `float → float`. Division by zero: runtime error in both backends. |
+| Arithmetic `+ - * / mod` | `int op int → int`, any `float → float`. Division by zero: runtime error in both backends. Remainder is `mod` because `%` starts a comment. |
 | Logic `and`, `or`, `not` | Merge `Cond` into `Expr`: a condition is just an expression of type `bool`. |
 
 **Decided:** variables inside a larger expression are only **read**, never moved.

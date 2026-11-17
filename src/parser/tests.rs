@@ -254,7 +254,7 @@ fn bool_only_supports_equality() {
 
 #[test]
 fn condition_without_operator_must_be_bool() {
-    err("set a: int = 1;\nif a ->\n<-;", 2, "a condition without an operator must be bool, got int");
+    err("set a: int = 1;\nif a ->\n<-;", 2, "a condition must be bool, got int");
 }
 
 // ------------------------------------------------------------- functions and calls
@@ -388,4 +388,119 @@ fn functions_are_separated_from_main() {
     assert_eq!(program.functions.len(), 1);
     assert_eq!(program.functions[0].body.len(), 1);
     assert_eq!(program.main.len(), 2);
+}
+
+// ------------------------------------------------------------- expressions
+
+/// Parse `show(<expr>);` and return the expression.
+fn expr(src: &str) -> crate::ast::Expr {
+    let program = parse(&format!("show({src});")).unwrap_or_else(|e| panic!("`{src}`: {e}"));
+    let Some(Stmt::Print(e)) = program.main.into_iter().next() else { panic!("expected show") };
+    e
+}
+
+/// Fully parenthesized form, to check precedence.
+fn shape(e: &crate::ast::Expr) -> String {
+    use crate::ast::{Expr, UnaryOp};
+    match e {
+        Expr::Int(n) => n.to_string(),
+        Expr::Float(x) => format!("{x:?}"),
+        Expr::Bool(b) => b.to_string(),
+        Expr::Str(s) => format!("{s:?}"),
+        Expr::Var { name, .. } => name.clone(),
+        Expr::Unary { op: UnaryOp::Neg, expr } => format!("(-{})", shape(expr)),
+        Expr::Unary { op: UnaryOp::Not, expr } => format!("(not {})", shape(expr)),
+        Expr::Binary { op, lhs, rhs } => format!("({} {} {})", shape(lhs), op.symbol(), shape(rhs)),
+    }
+}
+
+#[test]
+fn operator_precedence() {
+    let cases = [
+        ("1 + 2 * 3", "(1 + (2 * 3))"),
+        ("(1 + 2) * 3", "((1 + 2) * 3)"),
+        ("10 - 3 - 2", "((10 - 3) - 2)"),
+        ("8 / 4 / 2", "((8 / 4) / 2)"),
+        ("7 mod 3 + 1", "((7 mod 3) + 1)"),
+        ("-2 * 3", "(-2 * 3)"),
+        ("- (2 + 3)", "(-(2 + 3))"),
+        ("2 - -3", "(2 - -3)"),
+        ("1 + 2 < 4", "((1 + 2) < 4)"),
+        ("not 1 < 2", "(not (1 < 2))"),
+        ("true or false and false", "(true or (false and false))"),
+        ("not true and false", "((not true) and false)"),
+        ("1 < 2 and 3 >= 4 or 5 != 6", "(((1 < 2) and (3 >= 4)) or (5 != 6))"),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(shape(&expr(src)), expected, "`{src}`");
+    }
+}
+
+#[test]
+fn arithmetic_result_types() {
+    use crate::ast::Type;
+    assert_eq!(expr("7 / 2").ty(), Type::Int);
+    assert_eq!(expr("7 / 2.0").ty(), Type::Float);
+    assert_eq!(expr("1 + 2 * 1.5").ty(), Type::Float);
+    assert_eq!(expr("7 mod 2").ty(), Type::Int);
+    assert_eq!(expr("-(1.5)").ty(), Type::Float);
+    assert_eq!(expr("1 < 2").ty(), Type::Bool);
+    assert_eq!(expr("not true").ty(), Type::Bool);
+}
+
+#[test]
+fn expressions_can_be_stored_and_converted() {
+    ok("set a: int = 2 * 3;\nset b: float = a / 4;\nset c: bool = a > 1 and b < 2;");
+    err("set a: int = 1 + 0.5;", 1, "variable `a` has type int, but got a float value");
+}
+
+#[test]
+fn expression_type_errors() {
+    err("show(\"a\" + \"b\");", 1, "joining strings with `+` is not supported yet");
+    err("show(1 + \"b\");", 1, "`+` needs numbers, got int and str");
+    err("show(5 mod 2.0);", 1, "`mod` needs int values, got int and float");
+    err("show(not 1);", 1, "`not` needs a bool value, got int");
+    err("show(-\"x\");", 1, "`-` needs a number, got str");
+    err("show(1 and true);", 1, "`and` needs bool values, got int and bool");
+    err("show(1 < \"a\");", 1, "cannot compare int with str");
+}
+
+#[test]
+fn expression_syntax_errors() {
+    err("show(1 < 2 < 3);", 1, "comparisons cannot be chained");
+    err("show((1 + 2);", 1, "missing `)`");
+    err("show(1 +);", 1, "expected a value");
+    err("show(1 2);", 1, "unexpected `2`");
+    err("show(1 @ 2);", 1, "unexpected character `@`");
+    err("show(1.2.3);", 1, "unexpected character `.`");
+    err("set mod: int = 1;", 1, "`mod` is a keyword");
+}
+
+#[test]
+fn condition_can_be_any_bool_expression() {
+    ok("set a: int = 1;\nif (a + 1) * 2 > 3 and not (a = 0) ->\n<-;");
+    err("if 1 + 1 ->\n<-;", 1, "a condition must be bool, got int");
+}
+
+#[test]
+fn variables_inside_expressions_are_only_read() {
+    ok("set a: int = 1;\nset b: int = a + a;\nset c: int = a * 2;\nset d: bool = a = 1;\nshow(a);");
+    ok("fnc F(n: int)->\n<-;\nset a: int = 1;\nF(a + 1);\nF(a * 2);\nshow(a);");
+}
+
+#[test]
+fn a_bare_variable_still_moves() {
+    err("set a: int = 1;\nset b: int = a + 1;\nset c: int = a;\nshow(a);", 4, "variable `a` was moved on line 3");
+    err("set a: int = 1;\nset b: int = (a);\nshow(a);", 3, "variable `a` was moved on line 2");
+}
+
+#[test]
+fn moved_variable_cannot_be_used_in_an_expression() {
+    err("set a: int = 1;\nset b: int = a;\nshow(a + 1);", 3, "variable `a` was moved on line 2");
+}
+
+#[test]
+fn negative_literals_are_valid_defaults() {
+    ok("fnc F(n: int = -5, f: float = -1.5)->\n<-;");
+    err("fnc F(n: int = 1 + 1)->\n<-;", 1, "must be a literal value");
 }

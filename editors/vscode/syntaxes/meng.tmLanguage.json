@@ -42,7 +42,9 @@
       "patterns": [
         { "name": "keyword.control.meng", "match": "\\b(if|else)\\b" },
         { "name": "keyword.other.meng", "match": "\\b(set|show)\\b" },
-        { "name": "storage.modifier.meng", "match": "\\b(keep|reuse)\\b" }
+        { "name": "storage.modifier.meng", "match": "\\b(keep|reuse)\\b" },
+        { "name": "keyword.operator.logical.meng", "match": "\\b(and|or|not)\\b" },
+        { "name": "keyword.operator.arithmetic.meng", "match": "\\bmod\\b" }
       ]
     },
     "types": {
@@ -62,7 +64,8 @@
         { "name": "keyword.operator.borrow.meng", "match": "<==" },
         { "name": "keyword.operator.copy.meng", "match": "\\(\\)=>" },
         { "name": "keyword.control.block.meng", "match": "<-\\s*;|<-|->" },
-        { "name": "keyword.operator.comparison.meng", "match": "<=|>=|!=|=|<|>" }
+        { "name": "keyword.operator.comparison.meng", "match": "<=|>=|!=|=|<|>" },
+        { "name": "keyword.operator.arithmetic.meng", "match": "[+\\-*/]" }
       ]
     },
     "function-call": {

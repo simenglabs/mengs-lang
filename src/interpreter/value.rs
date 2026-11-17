@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::ast::Type;
+use crate::ast::{BinOp, Type};
 
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +35,40 @@ impl Value {
         }
     }
 
+    pub fn negate(self) -> Value {
+        match self {
+            Value::Int(n) => Value::Int(n.wrapping_neg()),
+            Value::Float(x) => Value::Float(-x),
+            v => v, // the parser only allows `-` on numbers
+        }
+    }
+
+    /// `+ - * / mod`. int op int stays int (wrapping on overflow, like C in practice);
+    /// any float makes the result float. Division by zero is a runtime error.
+    pub fn arithmetic(&self, op: BinOp, other: &Value) -> Result<Value, String> {
+        const DIV_ZERO: &str = "Runtime error: division by zero";
+        if let (Value::Int(a), Value::Int(b)) = (self, other) {
+            let (a, b) = (*a, *b);
+            return Ok(Value::Int(match op {
+                BinOp::Add => a.wrapping_add(b),
+                BinOp::Sub => a.wrapping_sub(b),
+                BinOp::Mul => a.wrapping_mul(b),
+                BinOp::Div if b == 0 => return Err(DIV_ZERO.into()),
+                BinOp::Div => a.wrapping_div(b),
+                BinOp::Mod if b == 0 => return Err(DIV_ZERO.into()),
+                _ => a.wrapping_rem(b),
+            }));
+        }
+        let (a, b) = (self.as_f64(), other.as_f64());
+        Ok(Value::Float(match op {
+            BinOp::Add => a + b,
+            BinOp::Sub => a - b,
+            BinOp::Mul => a * b,
+            _ if b == 0.0 => return Err(DIV_ZERO.into()),
+            _ => a / b, // `mod` is int-only, so this is `/`
+        }))
+    }
+
     fn as_f64(&self) -> f64 {
         match self {
             Value::Int(n) => *n as f64,
@@ -60,6 +94,12 @@ impl fmt::Display for Value {
 /// removed, scientific notation for very small or very large numbers.
 pub fn format_g(x: f64) -> String {
     const PRECISION: i32 = 6;
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf" } else { "-inf" }.to_string();
+    }
     if x == 0.0 {
         return "0".to_string();
     }

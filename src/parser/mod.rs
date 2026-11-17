@@ -3,15 +3,19 @@
 //! - `mod.rs`      — line reader, blocks (`fnc`, `if`/`else`), program structure
 //! - `comments.rs` — strips `% ... %` comments before parsing
 //! - `stmt.rs`     — single-line statements (`set`, borrow, copy, `show`, calls) and function headers
-//! - `expr.rs`     — values, conditions, identifiers, string literals
+//! - `lexer.rs`    — tokens for expressions (numbers, strings, names, operators)
+//! - `expr.rs`     — expressions by precedence, type checks, identifiers
 //! - `scope.rs`    — variable tracking (types, ownership: move / reuse / borrow)
 //! - `check.rs`    — function call checks (existence, argument count/types)
 
 mod check;
 mod comments;
 mod expr;
+mod lexer;
 mod scope;
-mod stmt; #[cfg(test)] mod tests;
+mod stmt;
+#[cfg(test)]
+mod tests;
 
 use crate::ast::{Expr, Function, Program, Stmt};
 use check::{PendingCall, check_calls};

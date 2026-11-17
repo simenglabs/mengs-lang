@@ -1,4 +1,4 @@
-use crate::ast::{CmpOp, Cond, Expr, Type};
+use crate::ast::{BinOp, Expr, Type, UnaryOp};
 
 use super::VAR_PREFIX;
 
@@ -15,27 +15,16 @@ pub fn declare(ty: Type, keep: bool, name: &str) -> String {
     }
 }
 
-pub fn emit_condition(cond: &Cond) -> String {
-    let (lhs, op, rhs) = match cond {
-        Cond::Bool(e) => return emit_expr(e),
-        Cond::Compare { lhs, op, rhs } => (lhs, op, rhs),
-    };
-    let op = match op {
-        CmpOp::Eq => "==",
-        CmpOp::Ne => "!=",
-        CmpOp::Lt => "<",
-        CmpOp::Gt => ">",
-        CmpOp::Le => "<=",
-        CmpOp::Ge => ">=",
-    };
-    let (l, r) = (emit_expr(lhs), emit_expr(rhs));
-    match lhs.ty() {
-        // Compare string contents (alphabetical order), not pointer addresses.
-        Type::Str => format!("strcmp({}, {}) {} 0", l, r, op),
-        Type::Int | Type::Float | Type::Bool => format!("{} {} {}", l, op, r),
+/// Expression without its outermost parentheses, for `if (...)`, assignments and arguments.
+pub fn emit_top(expr: &Expr) -> String {
+    let s = emit_expr(expr);
+    match expr {
+        Expr::Binary { op, .. } if !matches!(op, BinOp::Div | BinOp::Mod) => s[1..s.len() - 1].to_string(),
+        _ => s,
     }
 }
 
+/// Every operation is parenthesized, so C precedence never matters.
 pub fn emit_expr(expr: &Expr) -> String {
     match expr {
         Expr::Str(s) => format!("\"{}\"", escape_c_string(s)),
@@ -44,6 +33,38 @@ pub fn emit_expr(expr: &Expr) -> String {
         Expr::Float(f) => format!("{:?}", f),
         Expr::Bool(b) => b.to_string(),
         Expr::Var { name, .. } => format!("{}{}", VAR_PREFIX, name),
+        // The space avoids `--` when negating a negative literal.
+        Expr::Unary { op: UnaryOp::Neg, expr } => format!("(- {})", emit_expr(expr)),
+        Expr::Unary { op: UnaryOp::Not, expr } => format!("(!{})", emit_expr(expr)),
+        Expr::Binary { op, lhs, rhs } => emit_binary(*op, lhs, rhs),
+    }
+}
+
+fn emit_binary(op: BinOp, lhs: &Expr, rhs: &Expr) -> String {
+    let (l, r) = (emit_expr(lhs), emit_expr(rhs));
+    let float = lhs.ty() == Type::Float || rhs.ty() == Type::Float;
+    let c_op = match op {
+        // Division and remainder go through helpers that stop on division by zero.
+        BinOp::Div if float => return format!("meng_div_float({}, {})", l, r),
+        BinOp::Div => return format!("meng_div_int({}, {})", l, r),
+        BinOp::Mod => return format!("meng_mod_int({}, {})", l, r),
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Eq => "==",
+        BinOp::Ne => "!=",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
+    };
+    if lhs.ty() == Type::Str {
+        // Compare string contents (alphabetical order), not pointer addresses.
+        format!("(strcmp({}, {}) {} 0)", l, r, c_op)
+    } else {
+        format!("({} {} {})", l, c_op, r)
     }
 }
 

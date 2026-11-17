@@ -75,7 +75,7 @@ fn main() {
         Mode::Interpret => {
             let stdout = io::stdout();
             if let Err(e) = interpreter::run(&ast, &mut stdout.lock()) {
-                eprintln!("[ERROR] Failed to write output: {}", e);
+                eprintln!("[ERROR] {}", e);
                 process::exit(1);
             }
         }

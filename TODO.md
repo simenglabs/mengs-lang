@@ -4,11 +4,12 @@ See [PLAN.md](PLAN.md) for the order and approach.
 
 ## High priority
 - [x] Commit to git
-- [ ] Arithmetic: `+ - * / %`, string concatenation
+- [x] Arithmetic: `+ - * / mod`
+- [ ] String concatenation (needs heap strings)
 - [ ] Reassign a variable (`x = 5;`)
 - [ ] Function return values (`fnc Add(a: int, b: int): int`)
 - [ ] Loops (`while` / `for`)
-- [ ] Logical conditions: `and`, `or`, `not`
+- [x] Logical conditions: `and`, `or`, `not`
 - [x] Parser unit tests (ownership, borrow, copy, errors)
 
 ## Medium priority

@@ -145,7 +145,7 @@ fn parse_param(p: &str) -> Result<Param, String> {
         Some(d) => {
             let value = parse_expr(d, &mut Scope::default(), 0, Access::Read)
                 .ok()
-                .filter(|e| !matches!(e, Expr::Var { .. }));
+                .filter(Expr::is_literal);
             let value = value.ok_or_else(|| {
                 format!("default for parameter `{}` must be a literal value (got `{}`)", name, d)
             })?;

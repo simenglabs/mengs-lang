@@ -66,3 +66,43 @@ fn format_g_matches_printf() {
         assert_eq!(format_g(x), expected, "format_g({})", x);
     }
 }
+
+#[test]
+fn evaluates_arithmetic_like_c() {
+    let src = "set keep a: int = 7;\nset keep n: int = -7;\n\
+               show(1 + 2 * 3);\nshow(a / 2);\nshow(a mod 2);\nshow(n / 2);\nshow(n mod 2);\n\
+               show(a / 2.0);\nshow(-(a + 1));\nshow(0.1 + 0.2);\nset f: float = a / 2;\nshow(f);\n";
+    assert_eq!(output(src), "7\n3\n1\n-3\n-1\n3.5\n-8\n0.3\n3\n");
+}
+
+#[test]
+fn evaluates_logic_and_comparisons() {
+    let src = "set keep a: int = 7;\n\
+               show(a > 2 and a < 10);\nshow(a = 1 or not (a = 1));\nshow(not a > 2);\nshow(1 < 1.5);\n";
+    assert_eq!(output(src), "true\ntrue\nfalse\ntrue\n");
+}
+
+#[test]
+fn and_or_short_circuit() {
+    // The right side would divide by zero if it were evaluated.
+    let src = "set keep z: int = 0;\n\
+               if z != 0 and 10 / z > 1 ->\nshow(\"no\");\n<-;\n\
+               if z = 0 or 10 mod z = 1 ->\nshow(\"yes\");\n<-;\n";
+    assert_eq!(output(src), "yes\n");
+}
+
+#[test]
+fn division_by_zero_is_a_runtime_error() {
+    for src in ["set z: int = 0;\nshow(1 / z);", "set z: int = 0;\nshow(1 mod z);", "set z: float = 0;\nshow(1.5 / z);"] {
+        let program = parse(src).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(run(&program, &mut out), Err("Runtime error: division by zero".to_string()), "{src}");
+    }
+}
+
+#[test]
+fn format_g_handles_non_finite() {
+    assert_eq!(format_g(f64::INFINITY), "inf");
+    assert_eq!(format_g(f64::NEG_INFINITY), "-inf");
+    assert_eq!(format_g(f64::NAN), "nan");
+}
