@@ -15,6 +15,10 @@ pub enum Stmt {
     /// `else if` is stored as an `else_body` containing a single `If`.
     If { cond: Expr, body: Vec<Stmt>, else_body: Vec<Stmt> },
     While { cond: Expr, body: Vec<Stmt> },
+    /// `xs[i] = value;` (`elem` is the element type).
+    SetIndex { name: String, index: Expr, value: Expr, elem: Type },
+    /// `push(xs, value);`
+    Push { name: String, value: Expr, elem: Type },
     /// `return value;` or `return;` (only inside functions).
     Return(Option<Expr>),
 }

@@ -40,7 +40,7 @@
       }
     },
     "builtins": {
-      "match": "\\b(str|int|float|read)\\s*(?=\\()",
+      "match": "\\b(str|int|float|read|len|push)\\s*(?=\\()",
       "captures": { "1": { "name": "support.function.builtin.meng" } }
     },
     "keywords": {

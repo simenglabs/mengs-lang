@@ -37,7 +37,7 @@ So `set c: int = a + b;` leaves `a` and `b` usable, and `a + a` is valid.
 | Return values | `fnc Add(a: int, b: int): int -> return a + b; <-;`. Calls become expressions. Checker: every path returns. |
 | Loops | `while cond -> ... <-;`. Moving an outer variable inside a loop is an error (it would be moved twice). |
 
-## Phase 3 — Data and memory
+## Phase 3 — Data and memory ✅
 | Item | Notes |
 |---|---|
 | Heap strings + `free` | Strings created at runtime are owned; the compiler emits `free` when the owner goes out of scope. This is where ownership finally saves memory. |

@@ -32,20 +32,27 @@ MENG_HELPER void meng_out_of_memory(void) {
 }
 MENG_HELPER void *meng_alloc(void *p) { if (!p) meng_out_of_memory(); return p; }
 
-static char **meng_temps = NULL;
+/* Each temporary remembers how to free itself (strings and arrays differ). */
+typedef struct { void *ptr; void (*drop)(void *); } meng_temp_slot;
+static meng_temp_slot *meng_temps = NULL;
 static size_t meng_temps_len = 0, meng_temps_cap = 0;
 
-MENG_HELPER char *meng_temp(char *s) {
+MENG_HELPER void *meng_temp_with(void *ptr, void (*drop)(void *)) {
     if (meng_temps_len == meng_temps_cap) {
         meng_temps_cap = meng_temps_cap ? meng_temps_cap * 2 : 16;
         meng_temps = meng_alloc(realloc(meng_temps, meng_temps_cap * sizeof *meng_temps));
     }
-    meng_temps[meng_temps_len++] = s;
-    return s;
+    meng_temps[meng_temps_len].ptr = ptr;
+    meng_temps[meng_temps_len++].drop = drop;
+    return ptr;
 }
+MENG_HELPER char *meng_temp(char *s) { return meng_temp_with(s, free); }
 MENG_HELPER size_t meng_temps_mark(void) { return meng_temps_len; }
 MENG_HELPER void meng_temps_release(size_t mark) {
-    while (meng_temps_len > mark) free(meng_temps[--meng_temps_len]);
+    while (meng_temps_len > mark) {
+        meng_temps_len--;
+        meng_temps[meng_temps_len].drop(meng_temps[meng_temps_len].ptr);
+    }
 }
 
 MENG_HELPER char *meng_str_dup(const char *s) {
@@ -124,6 +131,89 @@ MENG_HELPER const char *meng_read(const char *prompt) {
     if (len > 0 && s[len - 1] == '\r') len--;
     s[len] = '\0';
     return meng_temp(s);
+}
+
+"#;
+
+/// Growable arrays (needs `STRINGS` for allocation and temporaries).
+/// `kind`: 'i' int, 'f' float, 'b' bool, 's' str (the array owns its strings).
+pub const ARRAYS: &str = r#"typedef struct { void *items; size_t len, cap; char kind; } meng_array;
+
+MENG_HELPER size_t meng_elem_size(char kind) {
+    return kind == 'i' ? sizeof(long long) : kind == 'f' ? sizeof(double) : kind == 'b' ? sizeof(bool) : sizeof(char *);
+}
+MENG_HELPER meng_array *meng_array_new(char kind) {
+    meng_array *a = meng_alloc(calloc(1, sizeof *a));
+    a->kind = kind;
+    return a;
+}
+MENG_HELPER void meng_array_free(void *p) {
+    meng_array *a = p;
+    if (!a) return;
+    if (a->kind == 's') for (size_t i = 0; i < a->len; i++) free(((char **)a->items)[i]);
+    free(a->items);
+    free(a);
+}
+MENG_HELPER meng_array *meng_array_copy(const meng_array *a) {
+    meng_array *b = meng_array_new(a->kind);
+    size_t size = meng_elem_size(a->kind);
+    b->len = b->cap = a->len;
+    b->items = meng_alloc(malloc(a->len ? a->len * size : 1));
+    if (a->len) memcpy(b->items, a->items, a->len * size);
+    if (a->kind == 's') for (size_t i = 0; i < b->len; i++) ((char **)b->items)[i] = meng_str_dup(((char **)a->items)[i]);
+    return b;
+}
+MENG_HELPER meng_array *meng_temp_array(meng_array *a) { return meng_temp_with(a, meng_array_free); }
+MENG_HELPER meng_array *meng_take_array(meng_array **slot) { meng_array *a = *slot; *slot = NULL; return a; }
+MENG_HELPER void meng_array_set(meng_array **slot, meng_array *value) { meng_array_free(*slot); *slot = value; }
+MENG_HELPER long long meng_array_len(const meng_array *a) { return (long long)a->len; }
+
+MENG_HELPER void *meng_array_slot(meng_array *a) {
+    size_t size = meng_elem_size(a->kind);
+    if (a->len == a->cap) {
+        a->cap = a->cap ? a->cap * 2 : 4;
+        a->items = meng_alloc(realloc(a->items, a->cap * size));
+    }
+    return (char *)a->items + a->len++ * size;
+}
+MENG_HELPER size_t meng_index(const meng_array *a, long long i) {
+    if (i < 0 || (size_t)i >= a->len) {
+        fflush(stdout);
+        fprintf(stderr, "[ERROR] Runtime error: index %lld is out of bounds (length %zu)\n", i, a->len);
+        exit(1);
+    }
+    return (size_t)i;
+}
+
+#define MENG_ARRAY_OPS(name, T)                                                                          \
+    MENG_HELPER meng_array *meng_push_##name(meng_array *a, T v) { *(T *)meng_array_slot(a) = v; return a; } \
+    MENG_HELPER T meng_get_##name(const meng_array *a, long long i) { return ((T *)a->items)[meng_index(a, i)]; } \
+    MENG_HELPER void meng_put_##name(meng_array *a, long long i, T v) { ((T *)a->items)[meng_index(a, i)] = v; }
+MENG_ARRAY_OPS(int, long long)
+MENG_ARRAY_OPS(float, double)
+MENG_ARRAY_OPS(bool, bool)
+
+/* Strings: the array owns them; `v` must be an owned heap string. */
+MENG_HELPER meng_array *meng_push_str(meng_array *a, char *v) { *(char **)meng_array_slot(a) = v; return a; }
+MENG_HELPER const char *meng_get_str(const meng_array *a, long long i) { return ((char **)a->items)[meng_index(a, i)]; }
+MENG_HELPER void meng_put_str(meng_array *a, long long i, char *v) {
+    char **slot = &((char **)a->items)[meng_index(a, i)];
+    free(*slot);
+    *slot = v;
+}
+
+MENG_HELPER void meng_print_array(const meng_array *a) {
+    putchar('[');
+    for (size_t i = 0; i < a->len; i++) {
+        if (i) fputs(", ", stdout);
+        switch (a->kind) {
+            case 'i': printf("%lld", ((long long *)a->items)[i]); break;
+            case 'f': printf("%g", ((double *)a->items)[i]); break;
+            case 'b': fputs(((bool *)a->items)[i] ? "true" : "false", stdout); break;
+            default: fputs(((char **)a->items)[i], stdout);
+        }
+    }
+    puts("]");
 }
 
 "#;

@@ -118,12 +118,36 @@ impl Scope {
         }
         let ty = var.ty;
         self.vars.get_mut(name).unwrap().moved_at = None;
+        self.make_borrows_stale(name, line);
+        Ok(ty)
+    }
+
+    /// `push(xs, v);`, `xs[i] = v;` — changes the value in place. Like a reassign,
+    /// this makes existing borrows stale (the array may move in memory).
+    pub fn mutate(&mut self, name: &str, line: usize) -> Result<Type, String> {
+        let ty = self.access(name, line, Access::Read)?;
+        let var = self.get(name)?;
+        if var.kind == Kind::Keep {
+            return Err(format!("`{}` is a constant (keep) and cannot be changed", name));
+        }
+        if let Some(owner) = &var.borrows {
+            return Err(format!("`{}` borrows `{}` and cannot change it; change `{}` instead", name, owner, owner));
+        }
+        self.make_borrows_stale(name, line);
+        Ok(ty)
+    }
+
+    fn make_borrows_stale(&mut self, owner: &str, line: usize) {
         for v in self.vars.values_mut() {
-            if v.borrows.as_deref() == Some(name) {
+            if v.borrows.as_deref() == Some(owner) {
                 v.stale_at = Some(line);
             }
         }
-        Ok(ty)
+    }
+
+    /// Type of a declared variable (without checking its ownership state).
+    pub fn type_of(&self, name: &str) -> Option<Type> {
+        self.vars.get(name).map(|v| v.ty)
     }
 
     /// Whether moving this variable really takes its value (an owned variable,

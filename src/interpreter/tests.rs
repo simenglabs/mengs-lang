@@ -171,3 +171,33 @@ fn bad_conversions_are_runtime_errors() {
         assert_eq!(output_with_input(src, ""), Err(expected.to_string()), "{src}");
     }
 }
+
+#[test]
+fn arrays_index_push_and_print() {
+    let src = "set xs: [int] = [3, 1, 4];\nxs[0] = 9;\npush(xs, 2 + 6);\nshow(xs);\nshow(len(xs));\nshow(xs[3]);\n\
+               set fs: [float] = [1.5, 2];\npush(fs, 4);\nshow(fs);\n\
+               set ws: [str] = [\"a\"];\npush(ws, \"b\" + \"c\");\nshow(ws);\nshow([true, false]);\n\
+               set e: [int] = [];\nshow(e);\nshow(len(\"hello\"));\n";
+    assert_eq!(output(src), "[9, 1, 4, 8]\n4\n8\n[1.5, 2, 4]\n[a, bc]\n[true, false]\n[]\n5\n");
+}
+
+#[test]
+fn functions_take_and_return_arrays() {
+    let src = "fnc Range(n: int): [int] ->\nset out: [int] = [];\nset i: int = 0;\n\
+               while i < n ->\npush(out, i * i);\ni = i + 1;\n<-;\nreturn out;\n<-;\n\
+               fnc Sum(xs: [int]): int ->\nset t: int = 0;\nset reuse i: int = 0;\n\
+               while i < len(xs) ->\nt = t + xs[i];\ni = i + 1;\n<-;\nreturn t;\n<-;\n\
+               show(Range(4));\nshow(Sum(Range(5)));\nshow(Range(3)[2]);\n";
+    assert_eq!(output(src), "[0, 1, 4, 9]\n30\n4\n");
+}
+
+#[test]
+fn index_out_of_bounds_is_a_runtime_error() {
+    let cases = [
+        ("set xs: [int] = [1, 2];\nshow(xs[2]);", "Runtime error: index 2 is out of bounds (length 2)"),
+        ("set xs: [str] = [\"a\"];\nxs[-1] = \"b\";", "Runtime error: index -1 is out of bounds (length 1)"),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(output_with_input(src, ""), Err(expected.to_string()), "{src}");
+    }
+}

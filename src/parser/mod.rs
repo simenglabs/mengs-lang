@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use crate::ast::{Function, Program, Signature, Stmt, always_returns};
 use comments::strip_comments;
-use expr::{BUILTINS, parse_condition, parse_expr};
+use expr::{BUILTINS, parse_condition, parse_typed};
 use scope::{Access, Kind, Scope};
 use stmt::{check_assign, parse_fn_header, parse_stmt};
 
@@ -223,7 +223,7 @@ impl<'a> Parser<'a> {
             ("", Some(ty)) => Err(format!("function `{}` must return {} value", sig.name, ty.with_article())),
             (_, None) => Err(format!("function `{}` has no return type, so use `return;` without a value", sig.name)),
             (value, Some(ty)) => {
-                let expr = parse_expr(value, scope, no, Access::Move)?;
+                let expr = parse_typed(value, scope, no, Access::Move, ty)?;
                 check_assign(ty, &expr, &format!("return value of `{}`", sig.name))?;
                 Ok(Stmt::Return(Some(expr)))
             }

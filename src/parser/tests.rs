@@ -416,6 +416,9 @@ fn shape(e: &crate::ast::Expr) -> String {
         }
         Expr::Convert { to, expr } => format!("{}({})", to.name(), shape(expr)),
         Expr::Read { .. } => "read()".into(),
+        Expr::Array { items, .. } => format!("[{}]", items.iter().map(shape).collect::<Vec<_>>().join(", ")),
+        Expr::Index { array, index, .. } => format!("{}[{}]", shape(array), shape(index)),
+        Expr::Len(e) => format!("len({})", shape(e)),
     }
 }
 
@@ -719,4 +722,58 @@ fn borrows_are_marked_for_codegen() {
     assert!(borrow(1), "<== is a borrow");
     assert!(borrow(2), "assigning from a borrow is a borrow");
     assert!(!borrow(3), "a copy owns its value");
+}
+
+// ------------------------------------------------------------- arrays
+
+#[test]
+fn array_types_and_literals() {
+    use crate::ast::Type;
+    assert_eq!(Type::parse("[int]"), Some(Type::Array(&Type::Int)));
+    assert_eq!(Type::parse("[[int]]"), None);
+    assert_eq!(expr("[1, 2]").ty(), Type::Array(&Type::Int));
+    assert_eq!(expr("[1, 2.5]").ty(), Type::Array(&Type::Float));
+    assert_eq!(expr("[\"a\"][0]").ty(), Type::Str);
+    assert_eq!(expr("len([true])").ty(), Type::Int);
+    assert_eq!(shape(&expr("[1, 2][0] + 1")), "([1, 2][0] + 1)");
+    err("set xs: [int] = [1, \"a\"];", 1, "all items of an array must have the same type, got int and str");
+    err("set xs: [int] = [1.5];", 1, "variable `xs` has type [int], but got a [float] value");
+    err("set xs: [[int]] = [];", 1, "unknown type `[[int]]`");
+}
+
+#[test]
+fn empty_array_takes_its_type_from_the_slot() {
+    ok("set xs: [int] = [];\nxs = [];\nfnc F(a: [str]): [str] ->\n    return [];\n<-;\nshow(F([]));");
+    err("show([]);", 1, "an empty array `[]` needs a known type");
+    err("set n: int = len([]);", 1, "an empty array `[]` needs a known type");
+}
+
+#[test]
+fn indexing_rules() {
+    err("set xs: [int] = [1];\nshow(xs[0.5]);", 2, "an array index must be int, got float");
+    err("set n: int = 1;\nshow(n[0]);", 2, "only arrays can be indexed, got int");
+    err("set xs: [str] = [\"a\"];\nxs[0] = 1;", 2, "an item of `xs` has type str, but got an int value");
+    err("set xs: [int] = [1];\nshow(xs = xs);", 2, "arrays cannot be compared");
+    err("show(len(5));", 1, "`len` needs a str or an array, got int");
+    err("show(str([1]));", 1, "cannot convert [int] to str");
+}
+
+#[test]
+fn push_rules() {
+    ok("set xs: [float] = [];\npush(xs, 1);\npush(xs, 2.5);");
+    err("set xs: [int] = [1];\npush(xs, \"a\");", 2, "cannot push a str value into `xs` ([int])");
+    err("set n: int = 1;\npush(n, 2);", 2, "`push` needs an array, but `n` is an int");
+    err("set xs: [int] = [1];\nshow(push(xs, 1));", 2, "`push(xs, value);` is a statement, not a value");
+    err("fnc push(x: int)->\n<-;", 1, "`push` is a built-in function and cannot be redefined");
+}
+
+#[test]
+fn arrays_follow_ownership_rules() {
+    err("set keep xs: [int] = [1];\npush(xs, 2);", 2, "`xs` is a constant (keep) and cannot be changed");
+    err("set keep xs: [int] = [1];\nxs[0] = 2;", 2, "`xs` is a constant (keep) and cannot be changed");
+    err("set xs: [int] = [1];\nset b: [int] <== xs;\npush(b, 2);", 3, "`b` borrows `xs` and cannot change it");
+    err("set xs: [int] = [1];\nset b: [int] <== xs;\npush(xs, 2);\nshow(b);", 4, "`b` borrows `xs`, but `xs` got a new value on line 3");
+    err("set xs: [int] = [1];\nset ys: [int] = xs;\npush(xs, 1);", 3, "variable `xs` was moved on line 2");
+    err("set s: str = \"a\";\nset xs: [str] = [];\npush(xs, s);\nshow(s);", 4, "variable `s` was moved on line 3");
+    ok("set s: str = \"a\";\nset xs: [str] = [s];\nshow(s);");
 }

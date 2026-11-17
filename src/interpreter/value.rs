@@ -10,6 +10,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
+    Array(Vec<Value>),
 }
 
 impl Value {
@@ -18,15 +19,6 @@ impl Value {
         match (self, ty) {
             (Value::Int(n), Type::Float) => Value::Float(n as f64),
             (v, _) => v,
-        }
-    }
-
-    pub fn ty(&self) -> Type {
-        match self {
-            Value::Str(_) => Type::Str,
-            Value::Int(_) => Type::Int,
-            Value::Float(_) => Type::Float,
-            Value::Bool(_) => Type::Bool,
         }
     }
 
@@ -123,8 +115,26 @@ impl fmt::Display for Value {
             Value::Int(n) => write!(f, "{}", n),
             Value::Float(x) => f.write_str(&format_g(*x)),
             Value::Bool(b) => write!(f, "{}", b),
+            Value::Array(items) => {
+                f.write_str("[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                f.write_str("]")
+            }
         }
     }
+}
+
+/// Position of `index` in an array of `len` items, or the same runtime error as the C runtime.
+pub fn check_index(index: i64, len: usize) -> Result<usize, String> {
+    usize::try_from(index)
+        .ok()
+        .filter(|&i| i < len)
+        .ok_or_else(|| format!("Runtime error: index {} is out of bounds (length {})", index, len))
 }
 
 /// Accepted number text (after trimming spaces): `[+-]digits`, plus `.digits` for floats.

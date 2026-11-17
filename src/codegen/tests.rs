@@ -218,3 +218,21 @@ fn runtime_is_only_added_when_used() {
     assert!(!c.contains("meng_temp"), "{c}");
     assert!(!c.contains("meng_div"), "{c}");
 }
+
+#[test]
+fn arrays_are_built_moved_and_freed() {
+    use crate::parser::parse;
+    let src = "fnc Sum(xs: [int]): int ->\n    return len(xs);\n<-;\n\
+               set a: [int] = [1, 2];\npush(a, 3);\na[0] = 9;\nset b: [int] <== a;\nshow(b[1]);\n\
+               set c: [int] = a;\nshow(Sum(c));\nset s: [str] = [\"x\"];";
+    let c = generate_c(&parse(src).unwrap());
+    assert!(c.contains("meng_array *v_a = meng_push_int(meng_push_int(meng_array_new('i'), 1LL), 2LL);"), "{c}");
+    assert!(c.contains("meng_push_int(v_a, 3LL);"), "{c}");
+    assert!(c.contains("meng_put_int(v_a, 0LL, 9LL);"), "{c}");
+    assert!(c.contains("const meng_array *v_b = v_a;"), "{c}");
+    assert!(c.contains("meng_get_int(v_b, 1LL)"), "{c}");
+    assert!(c.contains("meng_array *v_c = meng_take_array(&v_a);"), "{c}");
+    assert!(c.contains("f_Sum(meng_take_array(&v_c))"), "{c}");
+    assert!(c.contains("meng_push_str(meng_array_new('s'), meng_str_dup(\"x\"))"), "{c}");
+    assert!(c.contains("    meng_array_free(v_s);\n    meng_array_free(v_c);\n    meng_array_free(v_a);\n"), "{c}");
+}

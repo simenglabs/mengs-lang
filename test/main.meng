@@ -191,3 +191,26 @@ while step < 3 ->
 <-;
 show(trail + "end");
 % read() reads a line of input, for example: set name: str = read("Name: "); %
+
+% Arrays: [int], [float], [str], [bool]. They follow the same ownership %
+% rules as strings and are freed automatically.                         %
+fnc Total(keep items: [int]): int ->
+    set sum: int = 0;
+    set reuse i: int = 0;
+    while i < len(items) ->
+        sum = sum + items[i];
+        i = i + 1;
+    <-;
+    return sum;
+<-;
+
+set reuse scores: [int] = [70, 85];
+push(scores, 92);
+scores[0] = 75;
+show(scores);
+show("total " + str(Total(scores)) + " from " + str(len(scores)) + " scores");
+
+set pets: [str] = [];
+push(pets, "cat");
+push(pets, "kitten");
+show(pets[1] + " is item 1 of " + str(len(pets)));

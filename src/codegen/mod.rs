@@ -4,7 +4,7 @@
 //! - `expr.rs`    — expressions, C types, owned values, string escaping
 //! - `runtime.rs` — C helpers (division checks, heap strings), added when used
 //!
-//! Memory: an owned `str` variable is freed when its block ends (or on `return`).
+//! Memory: an owned `str` or array variable is freed when its block ends (or on `return`).
 //! A move sets the source to NULL, so freeing it afterwards does nothing.
 
 mod expr;
@@ -13,7 +13,7 @@ mod runtime;
 mod tests;
 
 use crate::ast::{Expr, Function, Program, Stmt, Type, always_returns};
-use expr::{c_decl, c_return_type, declare, emit_call, emit_owned, emit_top, has_temps};
+use expr::{c_decl, c_return_type, declare, elem_name, emit_call, emit_item, emit_owned, emit_top, has_temps};
 
 /// Prefixes for C names so they never clash with C keywords or functions
 /// (e.g. a variable named `int` or a function named `printf`).
@@ -52,8 +52,12 @@ pub fn generate_c(program: &Program) -> String {
     }
     const STRING_HELPERS: &[&str] =
         &["meng_temp", "meng_str_", "meng_take", "meng_concat", "meng_int_to_str", "meng_float_to_str", "meng_read"];
-    if STRING_HELPERS.iter().any(|h| c.contains(h)) {
+    let arrays = c.contains("meng_array") || c.contains("meng_print_array");
+    if arrays || STRING_HELPERS.iter().any(|h| c.contains(h)) {
         out.push_str(runtime::STRINGS);
+    }
+    if arrays {
+        out.push_str(runtime::ARRAYS);
     }
     out + &c
 }
@@ -75,8 +79,8 @@ fn fn_signature(f: &Function) -> String {
 struct Emitter<'a> {
     c: String,
     functions: &'a [Function],
-    /// Owned `str` variables of each open block, innermost last.
-    scopes: Vec<Vec<String>>,
+    /// Owned `str` / array variables of each open block, innermost last.
+    scopes: Vec<Vec<(String, Type)>>,
     /// Where the current function's temporaries start (`meng_mark`, or `0` in `main`).
     mark: &'static str,
     /// Whether the current function creates temporaries at all.
@@ -97,13 +101,13 @@ impl Emitter<'_> {
         if self.temps {
             self.line(1, "size_t meng_mark = meng_temps_mark();");
         }
-        let owned_params = f.params.iter().filter(|p| p.ty == Type::Str).map(|p| p.name.clone()).collect();
+        let owned_params = f.params.iter().filter(|p| p.ty.is_heap()).map(|p| (p.name.clone(), p.ty)).collect();
         self.block(&f.body, 1, owned_params);
         self.c.push_str("}\n\n");
     }
 
     /// A block of statements; its owned strings are freed at the end.
-    fn block(&mut self, stmts: &[Stmt], depth: usize, owned: Vec<String>) {
+    fn block(&mut self, stmts: &[Stmt], depth: usize, owned: Vec<(String, Type)>) {
         self.scopes.push(owned);
         for stmt in stmts {
             self.stmt(stmt, depth);
@@ -113,8 +117,8 @@ impl Emitter<'_> {
         }
         let scope = self.scopes.pop().unwrap_or_default();
         if !always_returns(stmts) {
-            for name in scope.iter().rev() {
-                self.line(depth, &format!("free({}{});", VAR_PREFIX, name));
+            for (name, ty) in scope.iter().rev() {
+                self.line(depth, &free_var(name, *ty));
             }
         }
     }
@@ -128,12 +132,24 @@ impl Emitter<'_> {
             Stmt::Set { name, ty, keep, borrow, value } => {
                 let value = if *borrow { emit_top(value) } else { emit_owned(value) };
                 self.line(depth, &format!("{} = {};", declare(*ty, *keep, *borrow, name), value));
-                if *ty == Type::Str && !*borrow {
-                    self.scopes.last_mut().expect("inside a block").push(name.clone());
+                if ty.is_heap() && !*borrow {
+                    self.scopes.last_mut().expect("inside a block").push((name.clone(), *ty));
                 }
             }
             Stmt::Assign { name, value } if value.ty() == Type::Str => {
                 self.line(depth, &format!("meng_str_set(&{}{}, {});", VAR_PREFIX, name, emit_owned(value)));
+            }
+            Stmt::Assign { name, value } if value.ty().elem().is_some() => {
+                self.line(depth, &format!("meng_array_set(&{}{}, {});", VAR_PREFIX, name, emit_owned(value)));
+            }
+            Stmt::SetIndex { name, index, value, elem } => {
+                let (kind, _) = elem_name(*elem);
+                let (index, value) = (emit_top(index), emit_item(*elem, value));
+                self.line(depth, &format!("meng_put_{}({}{}, {}, {});", kind, VAR_PREFIX, name, index, value));
+            }
+            Stmt::Push { name, value, elem } => {
+                let (kind, _) = elem_name(*elem);
+                self.line(depth, &format!("meng_push_{}({}{}, {});", kind, VAR_PREFIX, name, emit_item(*elem, value)));
             }
             Stmt::Assign { name, value } => {
                 self.line(depth, &format!("{}{} = {};", VAR_PREFIX, name, emit_top(value)));
@@ -141,8 +157,12 @@ impl Emitter<'_> {
             Stmt::Print(expr) => self.line(depth, &emit_print(expr)),
             Stmt::Call { name, args } => {
                 let call = emit_call(name, args);
-                // A returned string that nobody uses is still owned: make it a temporary.
-                let call = if self.returns_str(name) { format!("meng_temp({})", call) } else { call };
+                // A returned string/array that nobody uses is still owned: make it a temporary.
+                let call = match self.return_type(name) {
+                    Some(Type::Str) => format!("meng_temp({})", call),
+                    Some(Type::Array(_)) => format!("meng_temp_array({})", call),
+                    _ => call,
+                };
                 self.line(depth, &format!("{};", call));
             }
             Stmt::If { .. } => {
@@ -169,8 +189,8 @@ impl Emitter<'_> {
             cleanup.push(format!("meng_temps_release({});", self.mark));
         }
         for scope in self.scopes.iter().rev() {
-            for name in scope.iter().rev() {
-                cleanup.push(format!("free({}{});", VAR_PREFIX, name));
+            for (name, ty) in scope.iter().rev() {
+                cleanup.push(free_var(name, *ty));
             }
         }
         match value {
@@ -223,8 +243,8 @@ impl Emitter<'_> {
         self.c.push('\n');
     }
 
-    fn returns_str(&self, name: &str) -> bool {
-        self.functions.iter().any(|f| f.name == name && f.ret == Some(Type::Str))
+    fn return_type(&self, name: &str) -> Option<Type> {
+        self.functions.iter().find(|f| f.name == name).and_then(|f| f.ret)
     }
 }
 
@@ -235,8 +255,10 @@ fn stmt_has_temps(stmt: &Stmt, functions: &[Function]) -> bool {
         Stmt::Set { value, .. } | Stmt::Assign { value, .. } | Stmt::Print(value) => has_temps(value),
         Stmt::Return(value) => value.as_ref().is_some_and(has_temps),
         Stmt::Call { name, args } => {
-            args.iter().any(has_temps) || functions.iter().any(|f| &f.name == name && f.ret == Some(Type::Str))
+            args.iter().any(has_temps) || functions.iter().any(|f| &f.name == name && f.ret.is_some_and(Type::is_heap))
         }
+        Stmt::SetIndex { index, value, .. } => has_temps(index) || has_temps(value),
+        Stmt::Push { value, .. } => has_temps(value),
         Stmt::If { cond, else_body, .. } => {
             has_temps(cond) || matches!(else_body.as_slice(), [nested @ Stmt::If { .. }] if stmt_has_temps(nested, functions))
         }
@@ -261,5 +283,14 @@ fn emit_print(expr: &Expr) -> String {
         Type::Int => format!("printf(\"%lld\\n\", {});", e),
         Type::Float => format!("printf(\"%g\\n\", {});", e),
         Type::Bool => format!("printf(\"%s\\n\", {} ? \"true\" : \"false\");", e),
+        Type::Array(_) => format!("meng_print_array({});", e),
+    }
+}
+
+/// Free an owned variable at the end of its block.
+fn free_var(name: &str, ty: Type) -> String {
+    match ty {
+        Type::Array(_) => format!("meng_array_free({}{});", VAR_PREFIX, name),
+        _ => format!("free({}{});", VAR_PREFIX, name),
     }
 }

@@ -1,6 +1,6 @@
 use crate::ast::{Expr, Param, Signature, Stmt, Type};
 
-use super::expr::{parse_call, parse_expr, parse_identifier, split_args};
+use super::expr::{parse_call, parse_expr, parse_identifier, parse_push, parse_typed, split_args};
 use super::scope::{Access, Kind, Scope};
 
 /// Parse a single-line statement and declare any new variable in `scope`.
@@ -19,12 +19,22 @@ pub fn parse_stmt(line: &str, scope: &mut Scope, no: usize) -> Result<Option<Stm
     if let Some((src, dst)) = line.strip_suffix(';').and_then(|s| s.split_once("()=>")) {
         return parse_copy(src.trim(), dst.trim(), scope, no).map(Some);
     }
-    // Reassign: name = expr;
-    if let Some((name, value)) = line.strip_suffix(';').and_then(|s| s.split_once('=')) {
-        let name = name.trim();
-        if is_word(name) && !value.starts_with('=') {
-            return parse_assign(name, value.trim(), scope, no).map(Some);
+    // Reassign: name = expr;   or an array item: name[index] = expr;
+    if let Some((target, value)) = line.strip_suffix(';').and_then(|s| s.split_once('=')) {
+        let target = target.trim();
+        if is_word(target) && !value.starts_with('=') {
+            return parse_assign(target, value.trim(), scope, no).map(Some);
         }
+        if let Some((name, index)) = target.strip_suffix(']').and_then(|t| t.split_once('[')) {
+            if is_word(name.trim()) && !value.starts_with('=') {
+                return parse_set_index(name.trim(), index, value.trim(), scope, no).map(Some);
+            }
+        }
+    }
+    // Append to an array: push(xs, value);
+    if line.starts_with("push(") && line.ends_with(");") {
+        let (name, value, elem) = parse_push(&line[..line.len() - 1], scope, no)?;
+        return Ok(Some(Stmt::Push { name, value, elem }));
     }
     // Function call: Name(expr, expr);  — bare variables are moved into the function.
     if let Some((name, _)) = line.strip_suffix(");").and_then(|s| s.split_once('(')) {
@@ -58,7 +68,7 @@ fn parse_set(rest: &str, scope: &mut Scope, no: usize) -> Result<Stmt, String> {
     }
 
     let (name, ty, kind) = parse_typed_name(&rest[..pos], example)?;
-    let value = parse_expr(rest[pos + 1..].trim(), scope, no, Access::Move)?;
+    let value = parse_typed(rest[pos + 1..].trim(), scope, no, Access::Move, ty)?;
     check_assign(ty, &value, &format!("variable `{}`", name))?;
 
     // Assigning from a borrow copies the reference: the new variable borrows the same owner.
@@ -75,11 +85,26 @@ fn parse_set(rest: &str, scope: &mut Scope, no: usize) -> Result<Stmt, String> {
 /// `name = expr` (without `;`): give an existing variable a new value.
 fn parse_assign(name: &str, value: &str, scope: &mut Scope, no: usize) -> Result<Stmt, String> {
     let name = parse_identifier(name)?;
+    let expected = scope.type_of(&name).ok_or_else(|| format!("variable `{}` is not declared", name))?;
     // The value is evaluated first, so `x = x + 1` reads the old `x`.
-    let value = parse_expr(value, scope, no, Access::Move)?;
+    let value = parse_typed(value, scope, no, Access::Move, expected)?;
     let ty = scope.reassign(&name, no)?;
     check_assign(ty, &value, &format!("variable `{}`", name))?;
     Ok(Stmt::Assign { name, value })
+}
+
+/// `name[index] = value` (without `;`): change one item of an array.
+fn parse_set_index(name: &str, index: &str, value: &str, scope: &mut Scope, no: usize) -> Result<Stmt, String> {
+    let name = parse_identifier(name)?;
+    let index = parse_expr(index, scope, no, Access::Read)?;
+    if index.ty() != Type::Int {
+        return Err(format!("an array index must be int, got {}", index.ty().name()));
+    }
+    let value = parse_expr(value, scope, no, Access::Move)?;
+    let ty = scope.mutate(&name, no)?;
+    let elem = ty.elem().ok_or_else(|| format!("only arrays can be indexed, but `{}` is {}", name, ty.with_article()))?;
+    check_assign(elem, &value, &format!("an item of `{}`", name))?;
+    Ok(Stmt::SetIndex { name, index, value, elem })
 }
 
 /// `set name: type <== owner;` — `name` refers to `owner` without taking it.
@@ -192,7 +217,7 @@ fn parse_typed_name(s: &str, example: &str) -> Result<(String, Type, Kind), Stri
 }
 
 fn parse_type(ty: &str) -> Result<Type, String> {
-    Type::parse(ty).ok_or_else(|| format!("unknown type `{}` (expected one of: str, int, float, bool)", ty))
+    Type::parse(ty).ok_or_else(|| format!("unknown type `{}` (expected str, int, float, bool, or an array of one of them like [int])", ty))
 }
 
 /// Make sure a value can be stored in the target type.

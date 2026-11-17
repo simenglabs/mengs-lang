@@ -10,7 +10,23 @@ pub fn c_return_type(ty: Option<Type>) -> &'static str {
         Some(Type::Int) => "long long",
         Some(Type::Float) => "double",
         Some(Type::Bool) => "bool",
+        Some(Type::Array(_)) => "meng_array *",
     }
+}
+
+/// Runtime name and kind letter of an element type (`meng_push_int`, `meng_array_new('i')`).
+pub fn elem_name(elem: Type) -> (&'static str, char) {
+    match elem {
+        Type::Int => ("int", 'i'),
+        Type::Float => ("float", 'f'),
+        Type::Bool => ("bool", 'b'),
+        _ => ("str", 's'),
+    }
+}
+
+/// Element value as the array stores it: strings are owned by the array.
+pub fn emit_item(elem: Type, value: &Expr) -> String {
+    if elem == Type::Str { emit_owned(value) } else { emit_top(value) }
 }
 
 /// `type name`, without a space after a pointer star (`char *name`).
@@ -29,18 +45,33 @@ pub fn declare(ty: Type, keep: bool, borrow: bool, name: &str) -> String {
         Type::Int => format!("{}long long {}{}", qual, VAR_PREFIX, name),
         Type::Float => format!("{}double {}{}", qual, VAR_PREFIX, name),
         Type::Bool => format!("{}bool {}{}", qual, VAR_PREFIX, name),
+        Type::Array(_) if borrow => format!("const meng_array *{}{}", VAR_PREFIX, name),
+        Type::Array(_) => format!("meng_array *{}{}{}", qual, VAR_PREFIX, name),
     }
 }
 
-/// A value to be *owned* by a variable, parameter, or return value.
-/// For `str`: a moved variable hands over its pointer (and becomes NULL);
-/// anything else is duplicated.
+/// A value to be *owned* by a variable, parameter, array item, or return value.
+/// For `str` and arrays: a moved variable hands over its pointer (and becomes NULL),
+/// a fresh value (array literal, returned value) is used as is, anything else is copied.
 pub fn emit_owned(expr: &Expr) -> String {
     match expr {
         Expr::Var { name, ty: Type::Str, moved: true } => format!("meng_take(&{}{})", VAR_PREFIX, name),
+        Expr::Var { name, ty: Type::Array(_), moved: true } => format!("meng_take_array(&{}{})", VAR_PREFIX, name),
+        Expr::Call { name, args, ty } if ty.is_heap() => emit_call(name, args),
+        Expr::Array { items, ty } => emit_array(items, *ty),
         _ if expr.ty() == Type::Str => format!("meng_str_dup({})", emit_top(expr)),
+        _ if expr.ty().elem().is_some() => format!("meng_array_copy({})", emit_top(expr)),
         _ => emit_top(expr),
     }
+}
+
+/// A new array: `meng_push_int(meng_push_int(meng_array_new('i'), 1LL), 2LL)`.
+fn emit_array(items: &[Expr], ty: Type) -> String {
+    let elem = ty.elem().expect("an array type");
+    let (name, kind) = elem_name(elem);
+    items.iter().fold(format!("meng_array_new('{}')", kind), |acc, item| {
+        format!("meng_push_{}({}, {})", name, acc, emit_item(elem, item))
+    })
 }
 
 /// `f_Name(arg, ...)`. Default arguments were already filled in by the parser.
@@ -54,12 +85,13 @@ pub fn emit_call(name: &str, args: &[Expr]) -> String {
 /// must be released after the statement.
 pub fn has_temps(expr: &Expr) -> bool {
     match expr {
-        Expr::Read { .. } => true,
-        Expr::Call { ty: Type::Str, .. } => true,
+        Expr::Read { .. } | Expr::Array { .. } => true,
+        Expr::Call { ty, .. } if ty.is_heap() => true,
         Expr::Convert { to: Type::Str, expr } if matches!(expr.ty(), Type::Int | Type::Float) => true,
         Expr::Binary { op: BinOp::Add, lhs, .. } if lhs.ty() == Type::Str => true,
         Expr::Str(_) | Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Var { .. } => false,
-        Expr::Unary { expr, .. } | Expr::Convert { expr, .. } => has_temps(expr),
+        Expr::Unary { expr, .. } | Expr::Convert { expr, .. } | Expr::Len(expr) => has_temps(expr),
+        Expr::Index { array, index, .. } => has_temps(array) || has_temps(index),
         Expr::Binary { lhs, rhs, .. } => has_temps(lhs) || has_temps(rhs),
         Expr::Call { args, .. } => args.iter().any(has_temps),
     }
@@ -93,6 +125,13 @@ pub fn emit_expr(expr: &Expr) -> String {
         Expr::Binary { op, lhs, rhs } => emit_binary(*op, lhs, rhs),
         // A returned string is owned by the caller: it becomes a temporary.
         Expr::Call { name, args, ty: Type::Str } => format!("meng_temp({})", emit_call(name, args)),
+        Expr::Call { name, args, ty: Type::Array(_) } => format!("meng_temp_array({})", emit_call(name, args)),
+        Expr::Array { items, ty } => format!("meng_temp_array({})", emit_array(items, *ty)),
+        Expr::Index { array, index, ty } => {
+            format!("meng_get_{}({}, {})", elem_name(*ty).0, emit_top(array), emit_top(index))
+        }
+        Expr::Len(expr) if expr.ty() == Type::Str => format!("((long long)strlen({}))", emit_top(expr)),
+        Expr::Len(expr) => format!("meng_array_len({})", emit_top(expr)),
         Expr::Call { name, args, .. } => emit_call(name, args),
         Expr::Convert { to, expr } => emit_convert(*to, expr),
         Expr::Read { prompt } => {

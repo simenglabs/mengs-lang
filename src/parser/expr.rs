@@ -11,7 +11,10 @@
 //! | unary      | `-` (prefix)                 |
 //! | primary    | literal, variable, call `F(...)`, built-in, `( ... )` |
 //!
-//! Built-ins: `str(x)`, `int(x)`, `float(x)`, `read()`, `read(prompt)`.
+//! | postfix    | `xs[i]`                      |
+//!
+//! Built-ins: `str(x)`, `int(x)`, `float(x)`, `read()`, `read(prompt)`, `len(x)`,
+//! and the statement `push(xs, value);`.
 
 use crate::ast::{BinOp, Expr, Type, UnaryOp};
 
@@ -25,7 +28,9 @@ const KEYWORDS: &[&str] = &[
 ];
 
 /// Built-in functions; user functions cannot use these names.
-pub const BUILTINS: &[&str] = &["str", "int", "float", "read"];
+pub const BUILTINS: &[&str] = &["str", "int", "float", "read", "len", "push"];
+
+const EMPTY_ARRAY_HELP: &str = "an empty array `[]` needs a known type; use it directly, e.g. set xs: [int] = [];";
 
 const COMPARISONS: &[(&str, BinOp)] = &[
     ("=", BinOp::Eq),
@@ -50,6 +55,49 @@ pub fn parse_expr(src: &str, scope: &mut Scope, line: usize, access: Access) -> 
         Expr::Var { name, ty, .. } if access == Access::Move => Ok(p.take(name, ty)?),
         expr => Ok(expr),
     }
+}
+
+/// An expression stored into a slot of type `expected` (a variable, return value,
+/// or argument). A bare `[]` takes its array type from the slot.
+pub fn parse_typed(
+    src: &str,
+    scope: &mut Scope,
+    line: usize,
+    access: Access,
+    expected: Type,
+) -> Result<Expr, String> {
+    match (src.trim(), expected) {
+        ("[]", Type::Array(_)) => Ok(Expr::Array { items: Vec::new(), ty: expected }),
+        _ => parse_expr(src, scope, line, access),
+    }
+}
+
+/// `push(xs, value)` (without `;`). Returns the array name, the value, and the element type.
+pub fn parse_push(src: &str, scope: &mut Scope, line: usize) -> Result<(String, Expr, Type), String> {
+    let usage = "invalid push, example: push(xs, 4);";
+    let mut p = ExprParser { tokens: tokenize(src)?, pos: 0, scope, line };
+    let name = match p.tokens.get(2).cloned() {
+        Some(Token::Ident(name)) if p.eat("push") && p.eat("(") => parse_identifier(&name)?,
+        _ => return Err(usage.into()),
+    };
+    p.pos = 3;
+    if !p.eat(",") {
+        return Err(usage.into());
+    }
+    // A bare variable pushed into an array is moved into it.
+    let value = match p.or()? {
+        Expr::Var { name, ty, .. } => p.take(name, ty)?,
+        value => value,
+    };
+    if !p.eat(")") || p.pos != p.tokens.len() {
+        return Err(usage.into());
+    }
+    let ty = p.scope.mutate(&name, line)?;
+    let elem = ty.elem().ok_or_else(|| format!("`push` needs an array, but `{}` is {}", name, ty.with_article()))?;
+    if !elem.accepts(value.ty()) {
+        return Err(format!("cannot push {} value into `{}` ({})", value.ty().with_article(), name, ty.name()));
+    }
+    Ok((name, value, elem))
 }
 
 /// A call used as a statement: `Name(args)` (without `;`). The function may
@@ -144,6 +192,9 @@ impl ExprParser<'_> {
             return Err("comparisons cannot be chained, use `and`: a < b and b < c".into());
         }
         let (lt, rt) = (lhs.ty(), rhs.ty());
+        if lt.elem().is_some() || rt.elem().is_some() {
+            return Err("arrays cannot be compared".into());
+        }
         if lt != rt && !(lt.is_numeric() && rt.is_numeric()) {
             return Err(format!("cannot compare {} with {}", lt.name(), rt.name()));
         }
@@ -191,7 +242,7 @@ impl ExprParser<'_> {
 
     fn unary(&mut self) -> Result<Expr, String> {
         if !self.eat("-") {
-            return self.primary();
+            return self.postfix();
         }
         // `-5` is a negative literal (so it can be a parameter default).
         match self.peek() {
@@ -213,6 +264,53 @@ impl ExprParser<'_> {
         }
     }
 
+    /// `value[index]`, possibly repeated.
+    fn postfix(&mut self) -> Result<Expr, String> {
+        let mut expr = self.primary()?;
+        while self.eat("[") {
+            let index = self.or()?;
+            if !self.eat("]") {
+                return Err("missing `]`".into());
+            }
+            let ty = expr.ty().elem().ok_or_else(|| format!("only arrays can be indexed, got {}", expr.ty().name()))?;
+            if index.ty() != Type::Int {
+                return Err(format!("an array index must be int, got {}", index.ty().name()));
+            }
+            expr = Expr::Index { array: Box::new(expr), index: Box::new(index), ty };
+        }
+        Ok(expr)
+    }
+
+    /// `[a, b, c]`. Ints and floats mix into a `[float]`.
+    fn array_literal(&mut self) -> Result<Expr, String> {
+        if self.eat("]") {
+            return Err(EMPTY_ARRAY_HELP.into());
+        }
+        let mut items = Vec::new();
+        loop {
+            items.push(self.or()?);
+            if self.eat("]") {
+                break;
+            }
+            if !self.eat(",") {
+                return Err("expected `,` or `]` in the array".into());
+            }
+        }
+        let mut elem = items[0].ty();
+        for item in &items[1..] {
+            let ty = item.ty();
+            if elem.is_numeric() && ty.is_numeric() {
+                if ty == Type::Float {
+                    elem = Type::Float;
+                }
+            } else if ty != elem {
+                return Err(format!("all items of an array must have the same type, got {} and {}", elem.name(), ty.name()));
+            }
+        }
+        let ty = Type::array_of(elem).ok_or("arrays cannot contain arrays")?;
+        Ok(Expr::Array { items, ty })
+    }
+
     fn primary(&mut self) -> Result<Expr, String> {
         let token = self.tokens.get(self.pos).cloned();
         self.pos += 1;
@@ -228,7 +326,7 @@ impl ExprParser<'_> {
                     let expr = self.or()?;
                     self.close_call(&word)?;
                     let ok = match to {
-                        Type::Str => true,
+                        Type::Str => expr.ty().elem().is_none(),
                         _ => matches!(expr.ty(), Type::Str | Type::Int | Type::Float),
                     };
                     if !ok {
@@ -236,6 +334,15 @@ impl ExprParser<'_> {
                     }
                     Ok(Expr::Convert { to, expr: Box::new(expr) })
                 }
+                "len" if self.eat("(") => {
+                    let expr = self.or()?;
+                    self.close_call("len")?;
+                    if expr.ty() != Type::Str && expr.ty().elem().is_none() {
+                        return Err(format!("`len` needs a str or an array, got {}", expr.ty().name()));
+                    }
+                    Ok(Expr::Len(Box::new(expr)))
+                }
+                "push" if self.eat("(") => Err("`push(xs, value);` is a statement, not a value".into()),
                 "read" if self.eat("(") => {
                     if self.eat(")") {
                         return Ok(Expr::Read { prompt: None });
@@ -261,6 +368,7 @@ impl ExprParser<'_> {
                     Ok(Expr::Var { name, ty, moved: false })
                 }
             },
+            Some(Token::Sym("[")) => self.array_literal(),
             Some(Token::Sym("(")) => {
                 let expr = self.or()?;
                 if !self.eat(")") {
@@ -281,14 +389,24 @@ impl ExprParser<'_> {
         if self.scope.function(name).is_none() {
             return Err(format!("function `{}` is not defined", name));
         }
+        let params: Vec<Type> = self.scope.function(name).expect("checked above").params.iter().map(|p| p.ty).collect();
         let mut args = Vec::new();
         if !self.eat(")") {
             loop {
-                let arg = match self.or()? {
+                // A bare `[]` takes the array type of its parameter.
+                let empty = self.peek() == Some(&Token::Sym("["))
+                    && self.tokens.get(self.pos + 1) == Some(&Token::Sym("]"))
+                    && matches!(self.tokens.get(self.pos + 2), Some(Token::Sym(",")) | Some(Token::Sym(")")));
+                if let (true, Some(&ty @ Type::Array(_))) = (empty, params.get(args.len())) {
+                    self.pos += 2;
+                    args.push(Expr::Array { items: Vec::new(), ty });
+                } else {
+                    let arg = match self.or()? {
                     Expr::Var { name, ty, .. } => self.take(name, ty)?,
-                    arg => arg,
-                };
-                args.push(arg);
+                        arg => arg,
+                    };
+                    args.push(arg);
+                }
                 if self.eat(")") {
                     break;
                 }

@@ -11,6 +11,8 @@ const BUILTINS = [
   { name: 'int', signature: 'int(value): int', snippet: 'int(${1:value})' },
   { name: 'float', signature: 'float(value): float', snippet: 'float(${1:value})' },
   { name: 'read', signature: 'read(prompt?): str', snippet: 'read(${1})' },
+  { name: 'len', signature: 'len(array or str): int', snippet: 'len(${1:items})' },
+  { name: 'push', signature: 'push(array, value);', snippet: 'push(${1:items}, ${2:value});' },
 ];
 
 const IDENT = '[A-Za-z_][A-Za-z0-9_]*';

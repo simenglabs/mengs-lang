@@ -18,6 +18,12 @@ pub enum Expr {
     Convert { to: Type, expr: Box<Expr> },
     /// `read()` / `read(prompt)`: one line from standard input.
     Read { prompt: Option<Box<Expr>> },
+    /// `[a, b, c]` (`ty` is the array type, also for an empty `[]`).
+    Array { items: Vec<Expr>, ty: Type },
+    /// `xs[i]` (`ty` is the element type).
+    Index { array: Box<Expr>, index: Box<Expr>, ty: Type },
+    /// `len(xs)` or `len(s)`.
+    Len(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,7 +84,8 @@ impl Expr {
             Expr::Int(_) => Type::Int,
             Expr::Float(_) => Type::Float,
             Expr::Bool(_) => Type::Bool,
-            Expr::Var { ty, .. } | Expr::Call { ty, .. } => *ty,
+            Expr::Var { ty, .. } | Expr::Call { ty, .. } | Expr::Array { ty, .. } | Expr::Index { ty, .. } => *ty,
+            Expr::Len(_) => Type::Int,
             Expr::Convert { to, .. } => *to,
             Expr::Read { .. } => Type::Str,
             // str + str joins strings.

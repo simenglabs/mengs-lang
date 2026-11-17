@@ -13,8 +13,8 @@ mod tests;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
-use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
-use value::Value;
+use crate::ast::{BinOp, Expr, Function, Program, Stmt, Type, UnaryOp};
+use value::{Value, check_index};
 
 /// Variables of one function call (or of the top level).
 /// Block scoping is enforced by the parser, so one map per call is enough.
@@ -51,7 +51,21 @@ impl Interpreter<'_, '_> {
                 Stmt::Assign { name, value } => {
                     let v = self.eval(value, frame)?;
                     let slot = frame.get_mut(name).expect("variables are checked by the parser");
-                    *slot = v.convert_to(slot.ty());
+                    *slot = match slot {
+                        Value::Float(_) => v.convert_to(Type::Float),
+                        _ => v,
+                    };
+                }
+                Stmt::SetIndex { name, index, value, elem } => {
+                    let Value::Int(i) = self.eval(index, frame)? else { unreachable!("index is int") };
+                    let v = self.eval(value, frame)?.convert_to(*elem);
+                    let items = array_mut(frame, name);
+                    let i = check_index(i, items.len())?;
+                    items[i] = v;
+                }
+                Stmt::Push { name, value, elem } => {
+                    let v = self.eval(value, frame)?.convert_to(*elem);
+                    array_mut(frame, name).push(v);
                 }
                 Stmt::Print(expr) => {
                     let v = self.eval(expr, frame)?;
@@ -107,6 +121,22 @@ impl Interpreter<'_, '_> {
             Expr::Call { name, args, .. } => {
                 self.call(name, args, frame)?.expect("the parser only allows calls that return a value")
             }
+            Expr::Array { items, ty } => {
+                let elem = ty.elem().expect("an array type");
+                let items = items.iter().map(|e| Ok(self.eval(e, frame)?.convert_to(elem)));
+                Value::Array(items.collect::<Result<_, String>>()?)
+            }
+            Expr::Index { array, index, .. } => {
+                let (Value::Array(items), Value::Int(i)) = (self.eval(array, frame)?, self.eval(index, frame)?) else {
+                    unreachable!("types are checked by the parser")
+                };
+                items[check_index(i, items.len())?].clone()
+            }
+            Expr::Len(expr) => match self.eval(expr, frame)? {
+                Value::Array(items) => Value::Int(items.len() as i64),
+                // Byte length, like C's strlen.
+                v => Value::Int(v.to_string().len() as i64),
+            },
             Expr::Convert { to, expr } => self.eval(expr, frame)?.convert(*to)?,
             Expr::Read { prompt } => {
                 if let Some(prompt) = prompt {
@@ -144,6 +174,13 @@ impl Interpreter<'_, '_> {
                 }
             }
         })
+    }
+}
+
+fn array_mut<'f>(frame: &'f mut Frame, name: &str) -> &'f mut Vec<Value> {
+    match frame.get_mut(name) {
+        Some(Value::Array(items)) => items,
+        _ => unreachable!("the parser checks that `{}` is an array", name),
     }
 }
 
