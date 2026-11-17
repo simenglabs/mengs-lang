@@ -1,50 +1,31 @@
-use crate::ast::{Function, Type};
+use crate::ast::{Expr, Signature};
 
-use super::at;
+/// Check a call against the function's signature (argument count, taking
+/// defaults into account, and argument types), then fill in missing
+/// arguments with the parameters' default values.
+pub fn check_call(sig: &Signature, mut args: Vec<Expr>) -> Result<Vec<Expr>, String> {
+    let max = sig.params.len();
+    let min = sig.params.iter().filter(|p| p.default.is_none()).count();
+    let given = args.len();
+    if given < min || given > max {
+        let expected = if min == max { max.to_string() } else { format!("{}-{}", min, max) };
+        return Err(format!("function `{}` takes {} argument(s), but {} were given", sig.name, expected, given));
+    }
 
-/// A function call checked after every function is known,
-/// so functions can be called before they are defined.
-pub struct PendingCall {
-    pub line: usize,
-    pub name: String,
-    pub arg_types: Vec<Type>,
-}
-
-/// Check that each called function exists, the argument count fits (taking
-/// defaults into account), and argument types match.
-pub fn check_calls(functions: &[Function], calls: &[PendingCall]) -> Result<(), String> {
-    for call in calls {
-        let f = functions
-            .iter()
-            .find(|f| f.name == call.name)
-            .ok_or_else(|| at(call.line, format!("function `{}` is not defined", call.name)))?;
-
-        let max = f.params.len();
-        let min = f.params.iter().filter(|p| p.default.is_none()).count();
-        let given = call.arg_types.len();
-        if given < min || given > max {
-            let expected = if min == max { max.to_string() } else { format!("{}-{}", min, max) };
-            return Err(at(
-                call.line,
-                format!("function `{}` takes {} argument(s), but {} were given", call.name, expected, given),
+    for (i, (param, arg)) in sig.params.iter().zip(&args).enumerate() {
+        if !param.ty.accepts(arg.ty()) {
+            return Err(format!(
+                "argument {} (`{}`) of function `{}` must be {}, got {}",
+                i + 1,
+                param.name,
+                sig.name,
+                param.ty.name(),
+                arg.ty().name()
             ));
         }
-
-        for (i, (param, &ty)) in f.params.iter().zip(&call.arg_types).enumerate() {
-            if !param.ty.accepts(ty) {
-                return Err(at(
-                    call.line,
-                    format!(
-                        "argument {} (`{}`) of function `{}` must be {}, got {}",
-                        i + 1,
-                        param.name,
-                        call.name,
-                        param.ty.name(),
-                        ty.name()
-                    ),
-                ));
-            }
-        }
     }
-    Ok(())
+
+    let defaults = sig.params[given..].iter().filter_map(|p| p.default.clone());
+    args.extend(defaults);
+    Ok(args)
 }

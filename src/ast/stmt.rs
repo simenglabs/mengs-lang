@@ -6,14 +6,20 @@ pub enum Stmt {
     /// Also produced by a borrow (`set b: T <== a;`) and a copy (`a ()=> b;`).
     /// `keep` = constant (`const` in C). Ownership rules are checked by the parser.
     Set { name: String, ty: Type, keep: bool, value: Expr },
+    /// `name = value;` (not allowed on `keep` or borrows).
+    Assign { name: String, value: Expr },
     Print(Expr),
+    /// A call used as a statement (any return value is ignored). `args` include defaults.
     Call { name: String, args: Vec<Expr> },
     /// `else if` is stored as an `else_body` containing a single `If`.
     If { cond: Expr, body: Vec<Stmt>, else_body: Vec<Stmt> },
+    While { cond: Expr, body: Vec<Stmt> },
+    /// `return value;` or `return;` (only inside functions).
+    Return(Option<Expr>),
 }
 
 /// Function parameter: `[keep|reuse] name: type [= literal]`.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub name: String,
     pub ty: Type,
@@ -22,12 +28,22 @@ pub struct Param {
     pub default: Option<Expr>,
 }
 
-/// Function definition: `fnc Name(a: str, b: int = 0)-> ... <-;`
+/// Function definition: `fnc Name(a: str, b: int = 0): int -> ... <-;`
 #[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
     pub params: Vec<Param>,
+    /// `None` = no return value.
+    pub ret: Option<Type>,
     pub body: Vec<Stmt>,
+}
+
+/// Everything a caller needs to know about a function (its header).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Signature {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret: Option<Type>,
 }
 
 /// A whole program: function definitions plus top-level statements (`main`).

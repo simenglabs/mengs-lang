@@ -67,7 +67,7 @@ fn keep_becomes_const() {
 }
 
 #[test]
-fn generates_functions_with_defaults() {
+fn generates_functions() {
     let program = Program {
         functions: vec![Function {
             name: "Greet".into(),
@@ -75,10 +75,12 @@ fn generates_functions_with_defaults() {
                 Param { name: "name".into(), ty: Type::Str, keep: false, reuse: false, default: None },
                 Param { name: "n".into(), ty: Type::Int, keep: true, reuse: false, default: Some(Expr::Int(3)) },
             ],
+            ret: None,
             body: vec![Stmt::Print(var("name", Type::Str))],
         }],
         main: vec![
-            Stmt::Call { name: "Greet".into(), args: vec![Expr::Str("Meng".into())] },
+            // The parser fills in defaults, so codegen receives every argument.
+            Stmt::Call { name: "Greet".into(), args: vec![Expr::Str("Meng".into()), Expr::Int(3)] },
             Stmt::Call { name: "Greet".into(), args: vec![Expr::Str("A".into()), Expr::Int(9)] },
         ],
     };
@@ -149,4 +151,30 @@ fn division_uses_checked_helpers() {
     assert!(c.contains("long long v_m = meng_mod_int(v_a, 2LL);"), "{c}");
     assert!(c.contains("double v_f = meng_div_float(v_a, 2.0);"), "{c}");
     assert!(c.contains("static void meng_division_by_zero(void)"), "{c}");
+}
+
+#[test]
+fn generates_return_types_while_and_assign() {
+    let program = Program {
+        functions: vec![Function {
+            name: "Twice".into(),
+            params: vec![Param { name: "n".into(), ty: Type::Int, keep: false, reuse: false, default: None }],
+            ret: Some(Type::Int),
+            body: vec![Stmt::Return(Some(bin(var("n", Type::Int), BinOp::Mul, Expr::Int(2))))],
+        }],
+        main: vec![
+            set("i", Type::Int, false, Expr::Int(0)),
+            Stmt::While {
+                cond: bin(var("i", Type::Int), BinOp::Lt, Expr::Int(3)),
+                body: vec![Stmt::Assign {
+                    name: "i".into(),
+                    value: Expr::Call { name: "Twice".into(), args: vec![var("i", Type::Int)], ty: Type::Int },
+                }],
+            },
+        ],
+    };
+    let c = generate_c(&program);
+    assert!(c.contains("static long long f_Twice(long long v_n);"), "{c}");
+    assert!(c.contains("    return v_n * 2LL;\n"), "{c}");
+    assert!(c.contains("    while (v_i < 3LL) {\n        v_i = f_Twice(v_i);\n    }\n"), "{c}");
 }

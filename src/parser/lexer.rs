@@ -10,12 +10,12 @@ pub enum Token {
     Float(f64),
     /// Names and word keywords (`and`, `or`, `not`, `mod`, `true`, ...).
     Ident(String),
-    /// Operators and parentheses.
+    /// Operators, parentheses, and commas.
     Sym(&'static str),
 }
 
 /// Two-character symbols must come before their one-character prefixes.
-const SYMBOLS: &[&str] = &["<=", ">=", "!=", "+", "-", "*", "/", "=", "<", ">", "(", ")"];
+const SYMBOLS: &[&str] = &["<=", ">=", "!=", "+", "-", "*", "/", "=", "<", ">", "(", ")", ","];
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

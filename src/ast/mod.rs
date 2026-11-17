@@ -5,5 +5,5 @@ mod stmt;
 mod types;
 
 pub use expr::{BinOp, Expr, UnaryOp};
-pub use stmt::{Function, Param, Program, Stmt};
+pub use stmt::{Function, Param, Program, Signature, Stmt};
 pub use types::Type;

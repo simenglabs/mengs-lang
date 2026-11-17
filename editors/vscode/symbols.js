@@ -3,12 +3,12 @@
 // Type checking and errors come from the real compiler (`meng check`); this file
 // only powers completion, hover, signature help, and go-to-definition.
 
-const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'if', 'else', 'and', 'or', 'not', 'mod'];
+const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'if', 'else', 'while', 'return', 'and', 'or', 'not', 'mod'];
 const TYPES = ['str', 'int', 'float', 'bool'];
 const CONSTANTS = ['true', 'false'];
 
 const IDENT = '[A-Za-z_][A-Za-z0-9_]*';
-const FNC_RE = new RegExp(`^(\\s*fnc\\s+)(${IDENT})\\s*\\((.*)\\)\\s*->\\s*$`);
+const FNC_RE = new RegExp(`^(\\s*fnc\\s+)(${IDENT})\\s*\\((.*)\\)\\s*(?::\\s*(${IDENT})\\s*)?->\\s*$`);
 const SET_RE = new RegExp(`^(\\s*set\\s+(?:(keep|reuse)\\s+)?)(${IDENT})\\s*:\\s*(${IDENT})\\s*(<==|=)`);
 const COPY_RE = new RegExp(`^\\s*(${IDENT})\\s*\\(\\)=>\\s*(${IDENT})\\s*;`);
 const PARAM_RE = new RegExp(`^(?:(keep|reuse)\\s+)?(${IDENT})\\s*:\\s*(${IDENT})\\s*(?:=\\s*(.+))?$`);
@@ -98,7 +98,8 @@ function indexSymbols(text) {
         line: i,
         column: fnc[1].length,
         endLine: lines.length - 1,
-        signature: `fnc ${fnc[2]}(${fnc[3].trim()})`,
+        returns: fnc[4] || null,
+        signature: `fnc ${fnc[2]}(${fnc[3].trim()})${fnc[4] ? ': ' + fnc[4] : ''}`,
       };
       functions.push(current);
       params.forEach((p) => variables.push({ ...p, line: i, column: line.indexOf(p.name, fnc[1].length + fnc[2].length), scope: current.name }));

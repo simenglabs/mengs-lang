@@ -139,3 +139,35 @@ show(big_order);
 if price > 5 or qty > 10 ->
     show("worth a discount");
 <-;
+
+% Functions can return a value: add the type after the parameters. %
+fnc Square(n: int): int ->
+    return n * n;
+<-;
+
+fnc Describe(score: int): str ->
+    if score >= 80 ->
+        return "great";
+    <- else if score >= 60 ->
+        return "good";
+    <-;
+    return "keep practicing";
+<-;
+
+show(Square(4) + Square(3));
+show(Describe(85));
+show(Describe(10));
+
+% Reassign: give a variable a new value. A moved variable becomes usable again. %
+set countdown: int = 3;
+while countdown > 0 ->
+    show(countdown);
+    countdown = countdown - 1;
+<-;
+show("liftoff");
+
+set word: str = "first";
+set taken: str = word;      % word is moved here... %
+word = "second";            % ...and usable again after a new value %
+show(word);
+show(taken);

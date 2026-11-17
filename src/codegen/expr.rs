@@ -1,6 +1,16 @@
 use crate::ast::{BinOp, Expr, Type, UnaryOp};
 
-use super::VAR_PREFIX;
+use super::{FN_PREFIX, VAR_PREFIX};
+
+/// The C type for a Meng type (also used for return types).
+pub fn c_type(ty: Type) -> &'static str {
+    match ty {
+        Type::Str => "const char *",
+        Type::Int => "long long",
+        Type::Float => "double",
+        Type::Bool => "bool",
+    }
+}
 
 /// C declaration for a variable or parameter, e.g. `long long v_age`.
 /// `keep` values become `const` in C.
@@ -9,10 +19,14 @@ pub fn declare(ty: Type, keep: bool, name: &str) -> String {
     match ty {
         // `const char *const` = a constant pointer to constant characters.
         Type::Str => format!("const char *{}{}{}", qual, VAR_PREFIX, name),
-        Type::Int => format!("{}long long {}{}", qual, VAR_PREFIX, name),
-        Type::Float => format!("{}double {}{}", qual, VAR_PREFIX, name),
-        Type::Bool => format!("{}bool {}{}", qual, VAR_PREFIX, name),
+        _ => format!("{}{} {}{}", qual, c_type(ty), VAR_PREFIX, name),
     }
+}
+
+/// `f_Name(arg, ...)`. Default arguments were already filled in by the parser.
+pub fn emit_call(name: &str, args: &[Expr]) -> String {
+    let args: Vec<String> = args.iter().map(emit_top).collect();
+    format!("{}{}({})", FN_PREFIX, name, args.join(", "))
 }
 
 /// Expression without its outermost parentheses, for `if (...)`, assignments and arguments.
@@ -37,6 +51,7 @@ pub fn emit_expr(expr: &Expr) -> String {
         Expr::Unary { op: UnaryOp::Neg, expr } => format!("(- {})", emit_expr(expr)),
         Expr::Unary { op: UnaryOp::Not, expr } => format!("(!{})", emit_expr(expr)),
         Expr::Binary { op, lhs, rhs } => emit_binary(*op, lhs, rhs),
+        Expr::Call { name, args, .. } => emit_call(name, args),
     }
 }
 

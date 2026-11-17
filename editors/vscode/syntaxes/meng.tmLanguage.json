@@ -40,7 +40,7 @@
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.meng", "match": "\\b(if|else)\\b" },
+        { "name": "keyword.control.meng", "match": "\\b(if|else|while|return)\\b" },
         { "name": "keyword.other.meng", "match": "\\b(set|show)\\b" },
         { "name": "storage.modifier.meng", "match": "\\b(keep|reuse)\\b" },
         { "name": "keyword.operator.logical.meng", "match": "\\b(and|or|not)\\b" },

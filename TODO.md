@@ -6,9 +6,10 @@ See [PLAN.md](PLAN.md) for the order and approach.
 - [x] Commit to git
 - [x] Arithmetic: `+ - * / mod`
 - [ ] String concatenation (needs heap strings)
-- [ ] Reassign a variable (`x = 5;`)
-- [ ] Function return values (`fnc Add(a: int, b: int): int`)
-- [ ] Loops (`while` / `for`)
+- [x] Reassign a variable (`x = 5;`)
+- [x] Function return values (`fnc Add(a: int, b: int): int ->`)
+- [x] `while` loops
+- [ ] `for` loops, `break` / `continue`
 - [x] Logical conditions: `and`, `or`, `not`
 - [x] Parser unit tests (ownership, borrow, copy, errors)
 

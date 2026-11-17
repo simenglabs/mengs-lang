@@ -1,7 +1,7 @@
 use super::Type;
 
 /// An expression. Types are checked by the parser, so `ty()` is always valid.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Str(String),
     Int(i64),
@@ -10,6 +10,8 @@ pub enum Expr {
     Var { name: String, ty: Type },
     Unary { op: UnaryOp, expr: Box<Expr> },
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    /// Call of a function that returns a value. `args` already include defaults.
+    Call { name: String, args: Vec<Expr>, ty: Type },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,7 +72,7 @@ impl Expr {
             Expr::Int(_) => Type::Int,
             Expr::Float(_) => Type::Float,
             Expr::Bool(_) => Type::Bool,
-            Expr::Var { ty, .. } => *ty,
+            Expr::Var { ty, .. } | Expr::Call { ty, .. } => *ty,
             Expr::Unary { op: UnaryOp::Neg, expr } => expr.ty(),
             Expr::Unary { op: UnaryOp::Not, .. } => Type::Bool,
             // int op int -> int; any float makes the result float.

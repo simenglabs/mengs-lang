@@ -106,3 +106,34 @@ fn format_g_handles_non_finite() {
     assert_eq!(format_g(f64::NEG_INFINITY), "-inf");
     assert_eq!(format_g(f64::NAN), "nan");
 }
+
+#[test]
+fn runs_while_loops_and_reassign() {
+    let src = "set i: int = 3;\nwhile i > 0 ->\nshow(i);\ni = i - 1;\n<-;\n\
+               set f: float = 1;\nf = 2;\nshow(f);\n";
+    assert_eq!(output(src), "3\n2\n1\n2\n");
+}
+
+#[test]
+fn returns_values_and_recurses() {
+    let src = "fnc Fact(n: int): int ->\nif n <= 1 ->\nreturn 1;\n<-;\nreturn n * Fact(n - 1);\n<-;\n\
+               fnc Half(n: int): float ->\nreturn n / 2.0;\n<-;\n\
+               fnc Wide(): float ->\nreturn 3;\n<-;\n\
+               show(Fact(10));\nshow(Half(7));\nshow(Wide() / 2);\n";
+    assert_eq!(output(src), "3628800\n3.5\n1.5\n");
+}
+
+#[test]
+fn return_leaves_loops_and_functions() {
+    let src = "fnc First(limit: int)->\nset i: int = 1;\nwhile true ->\n\
+               if i * i > limit ->\nshow(i);\nreturn;\n<-;\ni = i + 1;\n<-;\n<-;\n\
+               First(50);\nshow(\"after\");\n";
+    assert_eq!(output(src), "8\nafter\n");
+}
+
+#[test]
+fn defaults_are_used_in_expression_calls() {
+    let src = "fnc Scale(x: float, by: float = 2): float ->\nreturn x * by;\n<-;\n\
+               show(Scale(4));\nshow(Scale(4, 0.5) + 1);\n";
+    assert_eq!(output(src), "8\n3\n");
+}

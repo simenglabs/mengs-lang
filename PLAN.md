@@ -30,7 +30,7 @@ roadmap (arithmetic, logic, return values, loops) needs real expressions.
 Only a *bare* variable moves (`set y: int = x;`, `F(x)`).
 So `set c: int = a + b;` leaves `a` and `b` usable, and `a + a` is valid.
 
-## Phase 2 — Statements
+## Phase 2 — Statements ✅
 | Item | Notes |
 |---|---|
 | Reassign `x = 5;` | Not allowed on `keep` or borrows. Reassigning a moved variable makes it usable again. |

@@ -21,6 +21,15 @@ impl Value {
         }
     }
 
+    pub fn ty(&self) -> Type {
+        match self {
+            Value::Str(_) => Type::Str,
+            Value::Int(_) => Type::Int,
+            Value::Float(_) => Type::Float,
+            Value::Bool(_) => Type::Bool,
+        }
+    }
+
     pub fn as_bool(&self) -> bool {
         matches!(self, Value::Bool(true))
     }

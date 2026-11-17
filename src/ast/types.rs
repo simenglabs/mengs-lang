@@ -28,6 +28,16 @@ impl Type {
         }
     }
 
+    /// The name with its article, for messages: "an int", "a str".
+    pub fn with_article(self) -> &'static str {
+        match self {
+            Type::Str => "a str",
+            Type::Int => "an int",
+            Type::Float => "a float",
+            Type::Bool => "a bool",
+        }
+    }
+
     pub fn is_numeric(self) -> bool {
         matches!(self, Type::Int | Type::Float)
     }

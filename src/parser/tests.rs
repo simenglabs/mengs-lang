@@ -140,7 +140,7 @@ fn copy_is_independent_of_the_source() {
 
 #[test]
 fn copy_has_the_source_type() {
-    err("set a: int = 1;\na ()=> b;\nset c: str = b;", 3, "variable `c` has type str, but got a int value");
+    err("set a: int = 1;\na ()=> b;\nset c: str = b;", 3, "variable `c` has type str, but got an int value");
 }
 
 #[test]
@@ -411,6 +411,9 @@ fn shape(e: &crate::ast::Expr) -> String {
         Expr::Unary { op: UnaryOp::Neg, expr } => format!("(-{})", shape(expr)),
         Expr::Unary { op: UnaryOp::Not, expr } => format!("(not {})", shape(expr)),
         Expr::Binary { op, lhs, rhs } => format!("({} {} {})", shape(lhs), op.symbol(), shape(rhs)),
+        Expr::Call { name, args, .. } => {
+            format!("{}({})", name, args.iter().map(shape).collect::<Vec<_>>().join(", "))
+        }
     }
 }
 
@@ -503,4 +506,159 @@ fn moved_variable_cannot_be_used_in_an_expression() {
 fn negative_literals_are_valid_defaults() {
     ok("fnc F(n: int = -5, f: float = -1.5)->\n<-;");
     err("fnc F(n: int = 1 + 1)->\n<-;", 1, "must be a literal value");
+}
+
+// ------------------------------------------------------------- reassign
+
+#[test]
+fn reassign_changes_the_value() {
+    ok("set a: int = 1;\na = a + 1;\nset f: float = 1;\nf = 2;");
+    err("set a: int = 1;\na = \"x\";", 2, "variable `a` has type int, but got a str value");
+    err("nope = 1;", 1, "variable `nope` is not declared");
+}
+
+#[test]
+fn keep_cannot_be_reassigned() {
+    err("set keep a: int = 1;\na = 2;", 2, "`a` is a constant (keep) and cannot be reassigned");
+    err("fnc F(keep a: int)->\n    a = 2;\n<-;", 2, "`a` is a constant (keep)");
+}
+
+#[test]
+fn borrow_cannot_be_reassigned() {
+    err("set a: str = \"x\";\nset b: str <== a;\nb = \"y\";", 3, "`b` borrows `a` and cannot be reassigned");
+}
+
+#[test]
+fn reassign_makes_a_moved_variable_usable() {
+    ok("set a: str = \"x\";\nset b: str = a;\na = \"y\";\nshow(a);");
+}
+
+#[test]
+fn reassign_makes_borrows_stale() {
+    err("set a: str = \"x\";\nset b: str <== a;\na = \"y\";\nshow(b);", 4, "`b` borrows `a`, but `a` got a new value on line 3");
+    ok("set a: str = \"x\";\nset b: str <== a;\na = \"y\";\nset c: str <== a;\nshow(c);");
+}
+
+#[test]
+fn reassign_in_one_branch_does_not_revive() {
+    let src = "set a: str = \"x\";\nset b: str = a;\nif true ->\n    a = \"y\";\n<-;\nshow(a);";
+    err(src, 6, "variable `a` was moved on line 2");
+    ok("set a: str = \"x\";\nset b: str = a;\nif true ->\n    a = \"y\";\n<- else ->\n    a = \"z\";\n<-;\nshow(a);");
+}
+
+// ------------------------------------------------------------- while
+
+#[test]
+fn while_loop() {
+    ok("set i: int = 0;\nwhile i < 3 ->\n    show(i);\n    i = i + 1;\n<-;");
+    err("while 1 ->\n<-;", 1, "a condition must be bool, got int");
+    err("while true ->\n<- else ->\n<-;", 2, "`else` without `if`");
+    err("while true ->\n    show(1);", 1, "`while` loop is not closed");
+}
+
+#[test]
+fn moving_an_outer_variable_in_a_loop_is_an_error() {
+    let src = "fnc G(s: str)->\n<-;\nset a: str = \"x\";\nwhile true ->\n    G(a);\n<-;";
+    err(src, 5, "variable `a` is moved inside a loop");
+}
+
+#[test]
+fn moving_in_a_loop_is_fine_with_a_new_value_or_a_local() {
+    ok("fnc G(s: str)->\n<-;\nset a: str = \"x\";\nwhile true ->\n    G(a);\n    a = \"again\";\n<-;");
+    ok("fnc G(s: str)->\n<-;\nwhile true ->\n    set t: str = \"local\";\n    G(t);\n<-;");
+    ok("fnc G(s: str)->\n<-;\nset reuse a: str = \"x\";\nwhile true ->\n    G(a);\n<-;");
+}
+
+#[test]
+fn borrow_made_stale_in_a_loop_is_an_error() {
+    let src = "set a: str = \"x\";\nset r: str <== a;\nwhile true ->\n    show(r);\n    a = \"y\";\n<-;";
+    err(src, 5, "`r` borrows a variable that gets a new value inside a loop");
+}
+
+#[test]
+fn variables_declared_in_a_loop_are_not_visible_outside() {
+    err("while false ->\n    set a: int = 1;\n<-;\nshow(a);", 4, "variable `a` is not declared");
+}
+
+// ------------------------------------------------------------- return values
+
+#[test]
+fn function_with_return_value() {
+    ok("fnc Add(a: int, b: int): int ->\n    return a + b;\n<-;\nset s: int = Add(1, 2) * Add(3, 4);");
+    ok("fnc Half(n: int): float ->\n    return n / 2;\n<-;");
+}
+
+#[test]
+fn return_type_must_match() {
+    err("fnc F(): int ->\n    return \"x\";\n<-;", 2, "return value of `F` has type int, but got a str value");
+    err("fnc F(): int ->\n    return;\n<-;", 2, "function `F` must return an int value");
+    err("fnc F()->\n    return 1;\n<-;", 2, "has no return type, so use `return;`");
+    err("fnc F(): number ->\n<-;", 1, "unknown type `number`");
+}
+
+#[test]
+fn every_path_must_return() {
+    err("fnc F(): int ->\n    show(1);\n<-;", 1, "must return an int value on every path");
+    err("fnc F(n: int): int ->\n    if n > 0 ->\n        return 1;\n    <-;\n<-;", 1, "on every path");
+    err("fnc F(n: int): int ->\n    while n > 0 ->\n        return 1;\n    <-;\n<-;", 1, "on every path");
+    ok("fnc F(n: int): int ->\n    if n > 0 ->\n        return 1;\n    <- else ->\n        return 2;\n    <-;\n<-;");
+}
+
+#[test]
+fn return_only_inside_functions() {
+    err("return 1;", 1, "`return` can only be used inside a function");
+    err("if true ->\n    return;\n<-;", 2, "`return` can only be used inside a function");
+    err("set return: int = 1;", 1, "`return` is a keyword");
+}
+
+#[test]
+fn void_function_can_return_early() {
+    ok("fnc F(n: int)->\n    if n > 0 ->\n        return;\n    <-;\n    show(n);\n<-;");
+}
+
+#[test]
+fn moves_in_a_returning_branch_do_not_count_after_the_if() {
+    let src = "fnc G(s: str)->\n<-;\nfnc H(c: bool)->\n    set a: str = \"x\";\n    if c ->\n        G(a);\n        return;\n    <-;\n    show(a);\n<-;";
+    ok(src);
+}
+
+// ------------------------------------------------------------- calls in expressions
+
+#[test]
+fn calls_can_be_used_before_the_definition() {
+    ok("show(Twice(2));\nfnc Twice(n: int): int ->\n    return n * 2;\n<-;");
+}
+
+#[test]
+fn void_function_cannot_be_used_as_a_value() {
+    err("fnc F()->\n<-;\nshow(F() + 1);", 3, "function `F` does not return a value");
+}
+
+#[test]
+fn call_checks_in_expressions() {
+    let f = "fnc F(a: int, b: int = 2): int ->\n    return a + b;\n<-;\n";
+    ok(&format!("{f}show(F(1));\nshow(F(1, 5));"));
+    err(&format!("{f}show(F(1, 2, 3));"), 4, "takes 1-2 argument(s), but 3 were given");
+    err(&format!("{f}show(F(\"x\"));"), 4, "argument 1 (`a`) of function `F` must be int, got str");
+    err(&format!("{f}show(F(1,));"), 4, "expected a value");
+    err("show(Nope(1));", 1, "function `Nope` is not defined");
+}
+
+#[test]
+fn defaults_are_filled_in_by_the_parser() {
+    let program = parse("fnc F(a: int, b: int = 7)->\n<-;\nF(1);").unwrap();
+    let Stmt::Call { args, .. } = &program.main[0] else { panic!("expected call") };
+    assert_eq!(args, &vec![crate::ast::Expr::Int(1), crate::ast::Expr::Int(7)]);
+}
+
+#[test]
+fn bare_variable_argument_moves_inside_expressions_too() {
+    let f = "fnc F(s: str): int ->\n    return 1;\n<-;\nset s: str = \"x\";\n";
+    err(&format!("{f}set n: int = F(s) + F(s);"), 5, "variable `s` was moved on line 5");
+}
+
+#[test]
+fn function_header_syntax() {
+    err("fnc F(a: int)-> int ->\n<-;", 1, "invalid function syntax");
+    err("show(1);\nfnc F()->\n<-;\nfnc F()->\n<-;", 4, "function `F` is already defined");
 }

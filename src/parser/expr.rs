@@ -9,15 +9,17 @@
 //! | additive   | `+ -`                        |
 //! | multiply   | `* / mod`                    |
 //! | unary      | `-` (prefix)                 |
-//! | primary    | literal, variable, `( ... )` |
+//! | primary    | literal, variable, call `F(...)`, `( ... )` |
 
 use crate::ast::{BinOp, Expr, Type, UnaryOp};
 
+use super::check::check_call;
 use super::lexer::{Token, tokenize};
 use super::scope::{Access, Scope};
 
 const KEYWORDS: &[&str] = &[
-    "set", "keep", "reuse", "show", "fnc", "if", "else", "true", "false", "and", "or", "not", "mod",
+    "set", "keep", "reuse", "show", "fnc", "if", "else", "while", "return", "true", "false", "and", "or",
+    "not", "mod",
 ];
 
 const COMPARISONS: &[(&str, BinOp)] = &[
@@ -45,9 +47,28 @@ pub fn parse_expr(src: &str, scope: &mut Scope, line: usize, access: Access) -> 
     Ok(expr)
 }
 
-/// `if` condition (after `if ` is stripped, including the trailing `->`).
+/// A call used as a statement: `Name(args)` (without `;`). The function may
+/// have no return value. Returns the name and the arguments (defaults included).
+pub fn parse_call(src: &str, scope: &mut Scope, line: usize) -> Result<(String, Vec<Expr>), String> {
+    let mut p = ExprParser { tokens: tokenize(src)?, pos: 0, scope, line };
+    let name = match p.tokens.first() {
+        Some(Token::Ident(name)) => parse_identifier(name)?,
+        _ => return Err(format!("invalid call: `{}`", src)),
+    };
+    p.pos = 1;
+    if !p.eat("(") {
+        return Err(format!("invalid call: `{}`", src));
+    }
+    let (args, _) = p.call(&name)?;
+    if let Some(t) = p.tokens.get(p.pos) {
+        return Err(format!("unexpected `{}` in `{}`", t, src));
+    }
+    Ok((name, args))
+}
+
+/// `if` / `while` condition (after the keyword, including the trailing `->`).
 pub fn parse_condition(cond: &str, scope: &mut Scope, line: usize) -> Result<Expr, String> {
-    let usage = "invalid if syntax, example: if a < b -> or if active ->";
+    let usage = "a condition must end with `->`, example: if a < b ->";
     let cond = cond.strip_suffix("->").ok_or(usage)?.trim();
     let expr = parse_expr(cond, scope, line, Access::Read)?;
     if expr.ty() != Type::Bool {
@@ -197,6 +218,14 @@ impl ExprParser<'_> {
             Some(Token::Ident(word)) => match word.as_str() {
                 "true" => Ok(Expr::Bool(true)),
                 "false" => Ok(Expr::Bool(false)),
+                _ if self.eat("(") => {
+                    parse_identifier(&word)?;
+                    let (args, ret) = self.call(&word)?;
+                    let ty = ret.ok_or_else(|| {
+                        format!("function `{}` does not return a value, so it cannot be used in an expression", word)
+                    })?;
+                    Ok(Expr::Call { name: word, args, ty })
+                }
                 _ => {
                     let name = parse_identifier(&word)?;
                     let ty = self.scope.access(&name, self.line, Access::Read)?;
@@ -213,6 +242,35 @@ impl ExprParser<'_> {
             Some(t) => Err(format!("expected a value, got `{}`", t)),
             None => Err("expected a value".into()),
         }
+    }
+}
+
+impl ExprParser<'_> {
+    /// Arguments of `name(...)` (the `(` is already consumed). Bare variables are
+    /// moved into the function. Checks the signature and fills in defaults.
+    fn call(&mut self, name: &str) -> Result<(Vec<Expr>, Option<Type>), String> {
+        if self.scope.function(name).is_none() {
+            return Err(format!("function `{}` is not defined", name));
+        }
+        let mut args = Vec::new();
+        if !self.eat(")") {
+            loop {
+                let arg = self.or()?;
+                if let Expr::Var { name, .. } = &arg {
+                    self.scope.access(name, self.line, Access::Move)?;
+                }
+                args.push(arg);
+                if self.eat(")") {
+                    break;
+                }
+                if !self.eat(",") {
+                    return Err(format!("expected `,` or `)` in the call to `{}`", name));
+                }
+            }
+        }
+        let sig = self.scope.function(name).expect("checked above");
+        let ret = sig.ret;
+        Ok((check_call(sig, args)?, ret))
     }
 }
 

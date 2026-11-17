@@ -4,6 +4,21 @@
     "body": ["fnc ${1:Name}(${2:param}: ${3|str,int,float,bool|})->", "\t$0", "<-;"],
     "description": "Define a function"
   },
+  "Function with return value": {
+    "prefix": "fncr",
+    "body": ["fnc ${1:Name}(${2:param}: ${3|int,float,str,bool|}): ${4|int,float,str,bool|} ->", "\t$0", "\treturn ${5:value};", "<-;"],
+    "description": "Define a function that returns a value"
+  },
+  "Return": {
+    "prefix": "ret",
+    "body": ["return ${1:value};"],
+    "description": "Return a value"
+  },
+  "While": {
+    "prefix": "while",
+    "body": ["while ${1:a} ${2|<,>,<=,>=,=,!=|} ${3:b} ->", "\t$0", "<-;"],
+    "description": "while loop"
+  },
   "If": {
     "prefix": "if",
     "body": ["if ${1:a} ${2|=,!=,<,>,<=,>=|} ${3:b} ->", "\t$0", "<-;"],
