@@ -7,11 +7,17 @@ pub enum Expr {
     Int(i64),
     Float(f64),
     Bool(bool),
-    Var { name: String, ty: Type },
+    /// `moved` = this use moves ownership out of the variable (a bare owned
+    /// variable in `set y: T = x;`, `F(x)`, `return x;`).
+    Var { name: String, ty: Type, moved: bool },
     Unary { op: UnaryOp, expr: Box<Expr> },
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
     /// Call of a function that returns a value. `args` already include defaults.
     Call { name: String, args: Vec<Expr>, ty: Type },
+    /// `str(x)`, `int(x)`, `float(x)`.
+    Convert { to: Type, expr: Box<Expr> },
+    /// `read()` / `read(prompt)`: one line from standard input.
+    Read { prompt: Option<Box<Expr>> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,6 +79,10 @@ impl Expr {
             Expr::Float(_) => Type::Float,
             Expr::Bool(_) => Type::Bool,
             Expr::Var { ty, .. } | Expr::Call { ty, .. } => *ty,
+            Expr::Convert { to, .. } => *to,
+            Expr::Read { .. } => Type::Str,
+            // str + str joins strings.
+            Expr::Binary { op: BinOp::Add, lhs, .. } if lhs.ty() == Type::Str => Type::Str,
             Expr::Unary { op: UnaryOp::Neg, expr } => expr.ty(),
             Expr::Unary { op: UnaryOp::Not, .. } => Type::Bool,
             // int op int -> int; any float makes the result float.

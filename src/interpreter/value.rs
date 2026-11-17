@@ -52,10 +52,38 @@ impl Value {
         }
     }
 
+    /// `str(x)`, `int(x)`, `float(x)`, with the same rules and errors as the C runtime.
+    pub fn convert(self, to: Type) -> Result<Value, String> {
+        let bad = |s: &str| format!("Runtime error: cannot convert \"{}\" to {}", s, to.name());
+        Ok(match (self, to) {
+            (v, Type::Str) => Value::Str(v.to_string()),
+            (Value::Float(x), Type::Int) => Value::Int(x as i64),
+            (Value::Int(n), Type::Float) => Value::Float(n as f64),
+            (Value::Str(s), Type::Int) => {
+                let t = s.trim();
+                match is_number(t, false).then(|| t.parse().ok()).flatten() {
+                    Some(n) => Value::Int(n),
+                    None => return Err(bad(&s)),
+                }
+            }
+            (Value::Str(s), Type::Float) => {
+                let t = s.trim();
+                match is_number(t, true).then(|| t.parse().ok()).flatten() {
+                    Some(x) => Value::Float(x),
+                    None => return Err(bad(&s)),
+                }
+            }
+            (v, _) => v, // same type
+        })
+    }
+
     /// `+ - * / mod`. int op int stays int (wrapping on overflow, like C in practice);
     /// any float makes the result float. Division by zero is a runtime error.
     pub fn arithmetic(&self, op: BinOp, other: &Value) -> Result<Value, String> {
         const DIV_ZERO: &str = "Runtime error: division by zero";
+        if let (Value::Str(a), Value::Str(b)) = (self, other) {
+            return Ok(Value::Str(format!("{}{}", a, b)));
+        }
         if let (Value::Int(a), Value::Int(b)) = (self, other) {
             let (a, b) = (*a, *b);
             return Ok(Value::Int(match op {
@@ -97,6 +125,18 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
         }
     }
+}
+
+/// Accepted number text (after trimming spaces): `[+-]digits`, plus `.digits` for floats.
+/// The C runtime uses exactly the same rule.
+fn is_number(s: &str, allow_fraction: bool) -> bool {
+    let s = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let (int, frac) = match s.split_once('.') {
+        Some((i, f)) if allow_fraction => (i, Some(f)),
+        _ => (s, None),
+    };
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    digits(int) && frac.is_none_or(digits)
 }
 
 /// Format a float like C's `printf("%g")`: 6 significant digits, trailing zeros

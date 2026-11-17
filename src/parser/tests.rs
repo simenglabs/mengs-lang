@@ -414,6 +414,8 @@ fn shape(e: &crate::ast::Expr) -> String {
         Expr::Call { name, args, .. } => {
             format!("{}({})", name, args.iter().map(shape).collect::<Vec<_>>().join(", "))
         }
+        Expr::Convert { to, expr } => format!("{}({})", to.name(), shape(expr)),
+        Expr::Read { .. } => "read()".into(),
     }
 }
 
@@ -459,8 +461,7 @@ fn expressions_can_be_stored_and_converted() {
 
 #[test]
 fn expression_type_errors() {
-    err("show(\"a\" + \"b\");", 1, "joining strings with `+` is not supported yet");
-    err("show(1 + \"b\");", 1, "`+` needs numbers, got int and str");
+    err("show(1 + \"b\");", 1, "`+` joins two strings or adds two numbers, got int and str");
     err("show(5 mod 2.0);", 1, "`mod` needs int values, got int and float");
     err("show(not 1);", 1, "`not` needs a bool value, got int");
     err("show(-\"x\");", 1, "`-` needs a number, got str");
@@ -661,4 +662,61 @@ fn bare_variable_argument_moves_inside_expressions_too() {
 fn function_header_syntax() {
     err("fnc F(a: int)-> int ->\n<-;", 1, "invalid function syntax");
     err("show(1);\nfnc F()->\n<-;\nfnc F()->\n<-;", 4, "function `F` is already defined");
+}
+
+// ------------------------------------------------------------- strings
+
+#[test]
+fn strings_can_be_joined_and_converted() {
+    use crate::ast::Type;
+    assert_eq!(expr("\"a\" + \"b\"").ty(), Type::Str);
+    assert_eq!(expr("str(1) + str(2.5) + str(true)").ty(), Type::Str);
+    assert_eq!(expr("int(\"4\") + int(2.9)").ty(), Type::Int);
+    assert_eq!(expr("float(\"2.5\") * float(2)").ty(), Type::Float);
+    assert_eq!(expr("read()").ty(), Type::Str);
+    assert_eq!(expr("read(\"name: \")").ty(), Type::Str);
+}
+
+#[test]
+fn string_operator_errors() {
+    err("show(\"a\" + 1);", 1, "`+` joins two strings or adds two numbers, got str and int; convert with str(...)");
+    err("show(\"a\" - \"b\");", 1, "`-` needs numbers, got str and str");
+}
+
+#[test]
+fn builtin_errors() {
+    err("show(int(true));", 1, "cannot convert bool to int");
+    err("show(str(1, 2));", 1, "`str` takes one value");
+    err("show(read(1));", 1, "the prompt of `read` must be a str, got int");
+    err("fnc str(x: int): str ->\n    return \"x\";\n<-;", 1, "`str` is a built-in function and cannot be redefined");
+}
+
+#[test]
+fn type_names_can_still_be_variables() {
+    ok("set str: int = 1;\nshow(str + 1);\nshow(str(str));");
+}
+
+#[test]
+fn bare_variable_moves_are_marked_for_codegen() {
+    use crate::ast::Expr;
+    let program = parse("set a: str = \"x\";\nset reuse r: str = \"y\";\nset b: str = a;\nset c: str = r;").unwrap();
+    let moved = |i: usize| match &program.main[i] {
+        Stmt::Set { value: Expr::Var { moved, .. }, .. } => *moved,
+        _ => panic!("expected set from a variable"),
+    };
+    assert!(moved(2), "an owned variable is moved");
+    assert!(!moved(3), "a reuse variable is copied");
+}
+
+#[test]
+fn borrows_are_marked_for_codegen() {
+    let program = parse("set a: str = \"x\";\nset b: str <== a;\nset c: str = b;\na ()=> d;").unwrap();
+    let borrow = |i: usize| match &program.main[i] {
+        Stmt::Set { borrow, .. } => *borrow,
+        _ => panic!("expected set"),
+    };
+    assert!(!borrow(0));
+    assert!(borrow(1), "<== is a borrow");
+    assert!(borrow(2), "assigning from a borrow is a borrow");
+    assert!(!borrow(3), "a copy owns its value");
 }

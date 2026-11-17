@@ -6,7 +6,7 @@ fn main_only(stmts: Vec<Stmt>) -> Program {
 }
 
 fn var(name: &str, ty: Type) -> Expr {
-    Expr::Var { name: name.into(), ty }
+    Expr::Var { name: name.into(), ty, moved: false }
 }
 
 fn print(s: &str) -> Stmt {
@@ -14,7 +14,7 @@ fn print(s: &str) -> Stmt {
 }
 
 fn set(name: &str, ty: Type, keep: bool, value: Expr) -> Stmt {
-    Stmt::Set { name: name.into(), ty, keep, value }
+    Stmt::Set { name: name.into(), ty, keep, borrow: false, value }
 }
 
 fn bin(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
@@ -46,7 +46,7 @@ fn generates_all_types() {
         Stmt::Print(var("f", Type::Float)),
         Stmt::Print(var("b", Type::Bool)),
     ]));
-    assert!(c.contains("const char *v_s = \"Meng\";"));
+    assert!(c.contains("char *v_s = meng_str_dup(\"Meng\");"));
     assert!(c.contains("long long v_i = 7LL;"));
     assert!(c.contains("double v_f = 2.0;"));
     assert!(c.contains("bool v_b = true;"));
@@ -62,7 +62,7 @@ fn keep_becomes_const() {
         set("name", Type::Str, true, Expr::Str("nasri".into())),
         set("age", Type::Int, true, Expr::Int(20)),
     ]));
-    assert!(c.contains("const char *const v_name = \"nasri\";"));
+    assert!(c.contains("char *const v_name = meng_str_dup(\"nasri\");"));
     assert!(c.contains("const long long v_age = 20LL;"));
 }
 
@@ -85,9 +85,11 @@ fn generates_functions() {
         ],
     };
     let c = generate_c(&program);
-    assert!(c.contains("static void f_Greet(const char *v_name, const long long v_n);"));
-    assert!(c.contains("f_Greet(\"Meng\", 3LL);"));
-    assert!(c.contains("f_Greet(\"A\", 9LL);"));
+    assert!(c.contains("static void f_Greet(char *v_name, const long long v_n);"));
+    assert!(c.contains("f_Greet(meng_str_dup(\"Meng\"), 3LL);"));
+    assert!(c.contains("f_Greet(meng_str_dup(\"A\"), 9LL);"));
+    // The function owns its `str` parameter and frees it.
+    assert!(c.contains("    free(v_name);\n}"));
 }
 
 #[test]
@@ -150,7 +152,7 @@ fn division_uses_checked_helpers() {
     assert!(c.contains("long long v_i = meng_div_int(v_a, 2LL);"), "{c}");
     assert!(c.contains("long long v_m = meng_mod_int(v_a, 2LL);"), "{c}");
     assert!(c.contains("double v_f = meng_div_float(v_a, 2.0);"), "{c}");
-    assert!(c.contains("static void meng_division_by_zero(void)"), "{c}");
+    assert!(c.contains("void meng_division_by_zero(void)"), "{c}");
 }
 
 #[test]
@@ -177,4 +179,42 @@ fn generates_return_types_while_and_assign() {
     assert!(c.contains("static long long f_Twice(long long v_n);"), "{c}");
     assert!(c.contains("    return v_n * 2LL;\n"), "{c}");
     assert!(c.contains("    while (v_i < 3LL) {\n        v_i = f_Twice(v_i);\n    }\n"), "{c}");
+}
+
+#[test]
+fn strings_are_moved_borrowed_and_freed() {
+    use crate::parser::parse;
+    let src = "fnc Use(s: str)->\n    show(s);\n<-;\n\
+               set a: str = \"x\";\nset b: str <== a;\nset c: str = a;\nUse(c);\n\
+               set reuse r: str = \"y\";\nUse(r);\nif true ->\n    set inner: str = r + \"!\";\n<-;";
+    let c = generate_c(&parse(src).unwrap());
+    assert!(c.contains("char *v_a = meng_str_dup(\"x\");"), "{c}");
+    assert!(c.contains("const char *v_b = v_a;"), "a borrow only points: {c}");
+    assert!(c.contains("char *v_c = meng_take(&v_a);"), "a move hands the pointer over: {c}");
+    assert!(c.contains("f_Use(meng_take(&v_c));"), "{c}");
+    assert!(c.contains("f_Use(meng_str_dup(v_r));"), "reuse passes a copy: {c}");
+    assert!(c.contains("char *v_inner = meng_str_dup(meng_concat(v_r, \"!\"));"), "{c}");
+    assert!(c.contains("        free(v_inner);\n    }"), "freed at the end of its block: {c}");
+    assert!(c.contains("    free(v_r);\n    free(v_c);\n    free(v_a);\n    return 0;"), "{c}");
+    assert!(!c.contains("free(v_b)"), "borrows are never freed: {c}");
+}
+
+#[test]
+fn return_frees_locals_and_temporaries() {
+    use crate::parser::parse;
+    let src = "fnc F(n: int): str ->\n    set s: str = \"a\";\n    if n > 0 ->\n        return s + \"b\";\n    <-;\n    return s;\n<-;";
+    let c = generate_c(&parse(src).unwrap());
+    assert!(c.contains("static char *f_F(long long v_n)"), "{c}");
+    assert!(c.contains(
+        "        {\n            char *meng_ret = meng_str_dup(meng_concat(v_s, \"b\"));\n            \
+         meng_temps_release(meng_mark);\n            free(v_s);\n            return meng_ret;\n        }"
+    ), "{c}");
+}
+
+#[test]
+fn runtime_is_only_added_when_used() {
+    use crate::parser::parse;
+    let c = generate_c(&parse("show(\"hi\");\nshow(1 + 2);").unwrap());
+    assert!(!c.contains("meng_temp"), "{c}");
+    assert!(!c.contains("meng_div"), "{c}");
 }

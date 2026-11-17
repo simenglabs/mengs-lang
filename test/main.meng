@@ -171,3 +171,23 @@ set taken: str = word;      % word is moved here... %
 word = "second";            % ...and usable again after a new value %
 show(word);
 show(taken);
+
+% Strings: join with +, convert with str(), int(), float().                %
+% Every owned string is freed automatically when its block ends, and a     %
+% move hands the memory over without copying it.                           %
+fnc Badge(name: str, level: int): str ->
+    return "[" + name + " lv." + str(level) + "]";
+<-;
+
+set reuse player: str = "Meng";
+show(Badge(player, 7));
+show("Score: " + str(int("40") + 2) + " / " + str(float("2.5") * 2));
+
+set trail: str = "";
+set step: int = 0;
+while step < 3 ->
+    trail = trail + str(step) + ">";
+    step = step + 1;
+<-;
+show(trail + "end");
+% read() reads a line of input, for example: set name: str = read("Name: "); %

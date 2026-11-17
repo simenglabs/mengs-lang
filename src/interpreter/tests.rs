@@ -5,7 +5,7 @@ use crate::parser::parse;
 fn output(source: &str) -> String {
     let program = parse(source).expect("test source should parse");
     let mut out = Vec::new();
-    run(&program, &mut out).unwrap();
+    run(&program, &mut "".as_bytes(), &mut out).unwrap();
     String::from_utf8(out).unwrap()
 }
 
@@ -96,7 +96,7 @@ fn division_by_zero_is_a_runtime_error() {
     for src in ["set z: int = 0;\nshow(1 / z);", "set z: int = 0;\nshow(1 mod z);", "set z: float = 0;\nshow(1.5 / z);"] {
         let program = parse(src).unwrap();
         let mut out = Vec::new();
-        assert_eq!(run(&program, &mut out), Err("Runtime error: division by zero".to_string()), "{src}");
+        assert_eq!(run(&program, &mut "".as_bytes(), &mut out), Err("Runtime error: division by zero".to_string()), "{src}");
     }
 }
 
@@ -136,4 +136,38 @@ fn defaults_are_used_in_expression_calls() {
     let src = "fnc Scale(x: float, by: float = 2): float ->\nreturn x * by;\n<-;\n\
                show(Scale(4));\nshow(Scale(4, 0.5) + 1);\n";
     assert_eq!(output(src), "8\n3\n");
+}
+
+fn output_with_input(source: &str, input: &str) -> Result<String, String> {
+    let program = parse(source).expect("test source should parse");
+    let mut out = Vec::new();
+    run(&program, &mut input.as_bytes(), &mut out)?;
+    Ok(String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn joins_and_converts_strings() {
+    let src = "fnc Greet(n: str): str ->\nreturn \"Hi \" + n;\n<-;\n\
+               show(Greet(\"Meng\") + \"!\");\nshow(str(3.5) + str(-2) + str(true));\n\
+               show(int(\" 42 \") + int(9.99));\nshow(float(\"2.5\") * 2);\n";
+    assert_eq!(output(src), "Hi Meng!\n3.5-2true\n51\n5\n");
+}
+
+#[test]
+fn reads_lines_from_input() {
+    let src = "set name: str = read(\"Name: \");\nset age: int = int(read());\nshow(name + \" \" + str(age + 1));\nshow(read() + \"|\");\n";
+    assert_eq!(output_with_input(src, "Meng\r\n20\n").unwrap(), "Name: Meng 21\n|\n");
+}
+
+#[test]
+fn bad_conversions_are_runtime_errors() {
+    let cases = [
+        ("show(int(\"abc\"));", "Runtime error: cannot convert \"abc\" to int"),
+        ("show(int(\"1.5\"));", "Runtime error: cannot convert \"1.5\" to int"),
+        ("show(float(\".5\"));", "Runtime error: cannot convert \".5\" to float"),
+        ("show(int(\"99999999999999999999\"));", "Runtime error: cannot convert \"99999999999999999999\" to int"),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(output_with_input(src, ""), Err(expected.to_string()), "{src}");
+    }
 }

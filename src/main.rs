@@ -73,8 +73,8 @@ fn main() {
     match mode {
         Mode::Check => println!("[OK] No errors in '{}'", filename),
         Mode::Interpret => {
-            let stdout = io::stdout();
-            if let Err(e) = interpreter::run(&ast, &mut stdout.lock()) {
+            let (stdin, stdout) = (io::stdin(), io::stdout());
+            if let Err(e) = interpreter::run(&ast, &mut stdin.lock(), &mut stdout.lock()) {
                 eprintln!("[ERROR] {}", e);
                 process::exit(1);
             }

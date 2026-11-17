@@ -6,6 +6,7 @@
     { "include": "#comment" },
     { "include": "#string" },
     { "include": "#function-definition" },
+    { "include": "#builtins" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -37,6 +38,10 @@
         "1": { "name": "storage.type.function.meng" },
         "2": { "name": "entity.name.function.meng" }
       }
+    },
+    "builtins": {
+      "match": "\\b(str|int|float|read)\\s*(?=\\()",
+      "captures": { "1": { "name": "support.function.builtin.meng" } }
     },
     "keywords": {
       "patterns": [

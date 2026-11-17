@@ -2,38 +2,78 @@ use crate::ast::{BinOp, Expr, Type, UnaryOp};
 
 use super::{FN_PREFIX, VAR_PREFIX};
 
-/// The C type for a Meng type (also used for return types).
-pub fn c_type(ty: Type) -> &'static str {
+/// C return type. A returned `str` is a heap string the caller owns.
+pub fn c_return_type(ty: Option<Type>) -> &'static str {
     match ty {
-        Type::Str => "const char *",
-        Type::Int => "long long",
-        Type::Float => "double",
-        Type::Bool => "bool",
+        None => "void",
+        Some(Type::Str) => "char *",
+        Some(Type::Int) => "long long",
+        Some(Type::Float) => "double",
+        Some(Type::Bool) => "bool",
     }
 }
 
+/// `type name`, without a space after a pointer star (`char *name`).
+pub fn c_decl(ty: &str, name: &str) -> String {
+    if ty.ends_with('*') { format!("{}{}", ty, name) } else { format!("{} {}", ty, name) }
+}
+
 /// C declaration for a variable or parameter, e.g. `long long v_age`.
-/// `keep` values become `const` in C.
-pub fn declare(ty: Type, keep: bool, name: &str) -> String {
+/// An owned `str` is a heap string (`char *`, freed by its owner); a borrowed
+/// `str` only points at someone else's (`const char *`). `keep` adds `const`.
+pub fn declare(ty: Type, keep: bool, borrow: bool, name: &str) -> String {
     let qual = if keep { "const " } else { "" };
     match ty {
-        // `const char *const` = a constant pointer to constant characters.
-        Type::Str => format!("const char *{}{}{}", qual, VAR_PREFIX, name),
-        _ => format!("{}{} {}{}", qual, c_type(ty), VAR_PREFIX, name),
+        Type::Str if borrow => format!("const char *{}{}", VAR_PREFIX, name),
+        Type::Str => format!("char *{}{}{}", qual, VAR_PREFIX, name),
+        Type::Int => format!("{}long long {}{}", qual, VAR_PREFIX, name),
+        Type::Float => format!("{}double {}{}", qual, VAR_PREFIX, name),
+        Type::Bool => format!("{}bool {}{}", qual, VAR_PREFIX, name),
+    }
+}
+
+/// A value to be *owned* by a variable, parameter, or return value.
+/// For `str`: a moved variable hands over its pointer (and becomes NULL);
+/// anything else is duplicated.
+pub fn emit_owned(expr: &Expr) -> String {
+    match expr {
+        Expr::Var { name, ty: Type::Str, moved: true } => format!("meng_take(&{}{})", VAR_PREFIX, name),
+        _ if expr.ty() == Type::Str => format!("meng_str_dup({})", emit_top(expr)),
+        _ => emit_top(expr),
     }
 }
 
 /// `f_Name(arg, ...)`. Default arguments were already filled in by the parser.
+/// Parameters own their values, so `str` arguments are moved or duplicated.
 pub fn emit_call(name: &str, args: &[Expr]) -> String {
-    let args: Vec<String> = args.iter().map(emit_top).collect();
+    let args: Vec<String> = args.iter().map(emit_owned).collect();
     format!("{}{}({})", FN_PREFIX, name, args.join(", "))
+}
+
+/// Whether evaluating the expression creates temporary heap strings, which
+/// must be released after the statement.
+pub fn has_temps(expr: &Expr) -> bool {
+    match expr {
+        Expr::Read { .. } => true,
+        Expr::Call { ty: Type::Str, .. } => true,
+        Expr::Convert { to: Type::Str, expr } if matches!(expr.ty(), Type::Int | Type::Float) => true,
+        Expr::Binary { op: BinOp::Add, lhs, .. } if lhs.ty() == Type::Str => true,
+        Expr::Str(_) | Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Var { .. } => false,
+        Expr::Unary { expr, .. } | Expr::Convert { expr, .. } => has_temps(expr),
+        Expr::Binary { lhs, rhs, .. } => has_temps(lhs) || has_temps(rhs),
+        Expr::Call { args, .. } => args.iter().any(has_temps),
+    }
 }
 
 /// Expression without its outermost parentheses, for `if (...)`, assignments and arguments.
 pub fn emit_top(expr: &Expr) -> String {
     let s = emit_expr(expr);
     match expr {
-        Expr::Binary { op, .. } if !matches!(op, BinOp::Div | BinOp::Mod) => s[1..s.len() - 1].to_string(),
+        Expr::Binary { op, lhs, .. }
+            if !matches!(op, BinOp::Div | BinOp::Mod) && !(*op == BinOp::Add && lhs.ty() == Type::Str) =>
+        {
+            s[1..s.len() - 1].to_string()
+        }
         _ => s,
     }
 }
@@ -51,7 +91,28 @@ pub fn emit_expr(expr: &Expr) -> String {
         Expr::Unary { op: UnaryOp::Neg, expr } => format!("(- {})", emit_expr(expr)),
         Expr::Unary { op: UnaryOp::Not, expr } => format!("(!{})", emit_expr(expr)),
         Expr::Binary { op, lhs, rhs } => emit_binary(*op, lhs, rhs),
+        // A returned string is owned by the caller: it becomes a temporary.
+        Expr::Call { name, args, ty: Type::Str } => format!("meng_temp({})", emit_call(name, args)),
         Expr::Call { name, args, .. } => emit_call(name, args),
+        Expr::Convert { to, expr } => emit_convert(*to, expr),
+        Expr::Read { prompt } => {
+            let prompt = prompt.as_ref().map_or("\"\"".to_string(), |p| emit_top(p));
+            format!("meng_read({})", prompt)
+        }
+    }
+}
+
+fn emit_convert(to: Type, expr: &Expr) -> String {
+    let e = emit_top(expr);
+    match (expr.ty(), to) {
+        (from, to) if from == to => emit_expr(expr),
+        (Type::Int, Type::Str) => format!("meng_int_to_str({})", e),
+        (Type::Float, Type::Str) => format!("meng_float_to_str({})", e),
+        (Type::Bool, Type::Str) => format!("({} ? \"true\" : \"false\")", emit_expr(expr)),
+        (Type::Str, Type::Int) => format!("meng_str_to_int({})", e),
+        (Type::Str, Type::Float) => format!("meng_str_to_float({})", e),
+        (Type::Float, Type::Int) => format!("((long long)({}))", e),
+        (_, _) => format!("((double)({}))", e), // int -> float
     }
 }
 
@@ -59,6 +120,7 @@ fn emit_binary(op: BinOp, lhs: &Expr, rhs: &Expr) -> String {
     let (l, r) = (emit_expr(lhs), emit_expr(rhs));
     let float = lhs.ty() == Type::Float || rhs.ty() == Type::Float;
     let c_op = match op {
+        BinOp::Add if lhs.ty() == Type::Str => return format!("meng_concat({}, {})", emit_top(lhs), emit_top(rhs)),
         // Division and remainder go through helpers that stop on division by zero.
         BinOp::Div if float => return format!("meng_div_float({}, {})", l, r),
         BinOp::Div => return format!("meng_div_int({}, {})", l, r),

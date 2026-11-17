@@ -68,7 +68,8 @@ fn parse_set(rest: &str, scope: &mut Scope, no: usize) -> Result<Stmt, String> {
         }
         _ => scope.declare(&name, ty, kind)?,
     }
-    Ok(Stmt::Set { name, ty, keep: kind == Kind::Keep, value })
+    let borrow = scope.borrow_root(&name).is_some();
+    Ok(Stmt::Set { name, ty, keep: kind == Kind::Keep, borrow, value })
 }
 
 /// `name = expr` (without `;`): give an existing variable a new value.
@@ -101,8 +102,8 @@ fn parse_borrow(decl: &str, owner: &str, scope: &mut Scope, no: usize) -> Result
         ));
     }
     scope.declare_borrow(&name, ty, &owner)?;
-    let value = Expr::Var { name: owner, ty };
-    Ok(Stmt::Set { name, ty, keep: false, value })
+    let value = Expr::Var { name: owner, ty, moved: false };
+    Ok(Stmt::Set { name, ty, keep: false, borrow: true, value })
 }
 
 /// `source ()=> new_name;` — `new_name` is an independent copy; `source` stays usable.
@@ -112,7 +113,8 @@ fn parse_copy(src: &str, dst: &str, scope: &mut Scope, no: usize) -> Result<Stmt
     let dst = parse_identifier(dst)?;
     let ty = scope.access(&src, no, Access::Read)?;
     scope.declare(&dst, ty, Kind::Owned)?;
-    Ok(Stmt::Set { name: dst, ty, keep: false, value: Expr::Var { name: src, ty } })
+    let value = Expr::Var { name: src, ty, moved: false };
+    Ok(Stmt::Set { name: dst, ty, keep: false, borrow: false, value })
 }
 
 /// Function header (after `fnc `): `Name(a: str, b: int = 0)->` or `Name(a: int): int ->`.

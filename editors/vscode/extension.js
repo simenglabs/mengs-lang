@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  KEYWORDS, TYPES, CONSTANTS,
+  KEYWORDS, TYPES, CONSTANTS, BUILTINS,
   indexSymbols, visibleVariables, callContext, describeVar,
 } = require('./symbols');
 
@@ -44,6 +44,13 @@ const completionProvider = {
 
     for (const k of KEYWORDS) items.push(new vscode.CompletionItem(k, vscode.CompletionItemKind.Keyword));
     for (const c of CONSTANTS) items.push(new vscode.CompletionItem(c, vscode.CompletionItemKind.Constant));
+    for (const b of BUILTINS) {
+      const item = new vscode.CompletionItem(b.name + '()', vscode.CompletionItemKind.Function);
+      item.detail = `built-in: ${b.signature}`;
+      item.filterText = b.name;
+      item.insertText = new vscode.SnippetString(b.snippet);
+      items.push(item);
+    }
 
     for (const f of index.functions) {
       const item = new vscode.CompletionItem(f.name, vscode.CompletionItemKind.Function);

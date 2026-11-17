@@ -126,6 +126,12 @@ impl Scope {
         Ok(ty)
     }
 
+    /// Whether moving this variable really takes its value (an owned variable,
+    /// not `keep`/`reuse`/a borrow, which are copied instead).
+    pub fn is_owned(&self, name: &str) -> bool {
+        self.vars.get(name).is_some_and(|v| v.kind == Kind::Owned && v.borrows.is_none())
+    }
+
     fn get(&self, name: &str) -> Result<&VarInfo, String> {
         self.vars.get(name).ok_or_else(|| format!("variable `{}` is not declared", name))
     }

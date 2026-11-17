@@ -20,9 +20,9 @@ mod tests;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{Function, Program, Signature, Stmt};
+use crate::ast::{Function, Program, Signature, Stmt, always_returns};
 use comments::strip_comments;
-use expr::{parse_condition, parse_expr};
+use expr::{BUILTINS, parse_condition, parse_expr};
 use scope::{Access, Kind, Scope};
 use stmt::{check_assign, parse_fn_header, parse_stmt};
 
@@ -43,6 +43,9 @@ fn collect_signatures(lines: &[(usize, &str)]) -> Result<HashMap<String, Signatu
     for &(no, line) in lines {
         if let Some(header) = line.strip_prefix("fnc ") {
             let sig = parse_fn_header(header).map_err(|e| at(no, e))?;
+            if BUILTINS.contains(&sig.name.as_str()) {
+                return Err(at(no, format!("`{}` is a built-in function and cannot be redefined", sig.name)));
+            }
             if functions.contains_key(&sig.name) {
                 return Err(at(no, format!("function `{}` is already defined", sig.name)));
             }
@@ -50,15 +53,6 @@ fn collect_signatures(lines: &[(usize, &str)]) -> Result<HashMap<String, Signatu
         }
     }
     Ok(functions)
-}
-
-/// Whether a block always ends in `return` (directly, or in both branches of an `if`).
-fn always_returns(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|s| match s {
-        Stmt::Return(_) => true,
-        Stmt::If { body, else_body, .. } => always_returns(body) && always_returns(else_body),
-        _ => false,
-    })
 }
 
 /// Prefix an error message with its line number.

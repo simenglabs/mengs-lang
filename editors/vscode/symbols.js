@@ -6,6 +6,12 @@
 const KEYWORDS = ['set', 'keep', 'reuse', 'show', 'fnc', 'if', 'else', 'while', 'return', 'and', 'or', 'not', 'mod'];
 const TYPES = ['str', 'int', 'float', 'bool'];
 const CONSTANTS = ['true', 'false'];
+const BUILTINS = [
+  { name: 'str', signature: 'str(value): str', snippet: 'str(${1:value})' },
+  { name: 'int', signature: 'int(value): int', snippet: 'int(${1:value})' },
+  { name: 'float', signature: 'float(value): float', snippet: 'float(${1:value})' },
+  { name: 'read', signature: 'read(prompt?): str', snippet: 'read(${1})' },
+];
 
 const IDENT = '[A-Za-z_][A-Za-z0-9_]*';
 const FNC_RE = new RegExp(`^(\\s*fnc\\s+)(${IDENT})\\s*\\((.*)\\)\\s*(?::\\s*(${IDENT})\\s*)?->\\s*$`);
@@ -174,6 +180,6 @@ function callContext(prefix) {
 }
 
 module.exports = {
-  KEYWORDS, TYPES, CONSTANTS,
+  KEYWORDS, TYPES, CONSTANTS, BUILTINS,
   stripComments, splitArgs, indexSymbols, visibleVariables, callContext, describeVar,
 };

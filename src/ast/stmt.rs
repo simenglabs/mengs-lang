@@ -4,8 +4,9 @@ use super::{Expr, Type};
 #[derive(Debug, PartialEq)]
 pub enum Stmt {
     /// Also produced by a borrow (`set b: T <== a;`) and a copy (`a ()=> b;`).
-    /// `keep` = constant (`const` in C). Ownership rules are checked by the parser.
-    Set { name: String, ty: Type, keep: bool, value: Expr },
+    /// `keep` = constant (`const` in C). `borrow` = refers to another variable's
+    /// value without owning it. Ownership rules are checked by the parser.
+    Set { name: String, ty: Type, keep: bool, borrow: bool, value: Expr },
     /// `name = value;` (not allowed on `keep` or borrows).
     Assign { name: String, value: Expr },
     Print(Expr),
@@ -16,6 +17,15 @@ pub enum Stmt {
     While { cond: Expr, body: Vec<Stmt> },
     /// `return value;` or `return;` (only inside functions).
     Return(Option<Expr>),
+}
+
+/// Whether a block always ends in `return` (directly, or in both branches of an `if`).
+pub fn always_returns(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match s {
+        Stmt::Return(_) => true,
+        Stmt::If { body, else_body, .. } => always_returns(body) && always_returns(else_body),
+        _ => false,
+    })
 }
 
 /// Function parameter: `[keep|reuse] name: type [= literal]`.

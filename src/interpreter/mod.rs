@@ -11,7 +11,7 @@ mod value;
 mod tests;
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufRead, Write};
 
 use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 use value::Value;
@@ -26,16 +26,17 @@ enum Flow {
     Return(Option<Value>),
 }
 
-/// Run a program, writing its output to `out`.
-/// Errors are runtime errors (e.g. division by zero) or failures to write output.
-pub fn run(program: &Program, out: &mut dyn Write) -> Result<(), String> {
+/// Run a program, reading `read()` lines from `input` and writing output to `out`.
+/// Errors are runtime errors (e.g. division by zero) or I/O failures.
+pub fn run(program: &Program, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<(), String> {
     let functions = program.functions.iter().map(|f| (f.name.as_str(), f)).collect();
-    let mut interp = Interpreter { functions, out };
+    let mut interp = Interpreter { functions, input, out };
     interp.exec_block(&program.main, &mut Frame::new()).map(|_| ())
 }
 
 struct Interpreter<'p, 'o> {
     functions: HashMap<&'p str, &'p Function>,
+    input: &'o mut dyn BufRead,
     out: &'o mut dyn Write,
 }
 
@@ -54,7 +55,7 @@ impl Interpreter<'_, '_> {
                 }
                 Stmt::Print(expr) => {
                     let v = self.eval(expr, frame)?;
-                    writeln!(self.out, "{}", v).map_err(|e| format!("failed to write output: {}", e))?;
+                    writeln!(self.out, "{}", v).map_err(io_error)?;
                 }
                 Stmt::Call { name, args } => {
                     self.call(name, args, frame)?;
@@ -106,6 +107,17 @@ impl Interpreter<'_, '_> {
             Expr::Call { name, args, .. } => {
                 self.call(name, args, frame)?.expect("the parser only allows calls that return a value")
             }
+            Expr::Convert { to, expr } => self.eval(expr, frame)?.convert(*to)?,
+            Expr::Read { prompt } => {
+                if let Some(prompt) = prompt {
+                    let p = self.eval(prompt, frame)?;
+                    write!(self.out, "{}", p).and_then(|_| self.out.flush()).map_err(io_error)?;
+                }
+                let mut line = String::new();
+                self.input.read_line(&mut line).map_err(io_error)?;
+                let line = line.strip_suffix('\n').unwrap_or(&line);
+                Value::Str(line.strip_suffix('\r').unwrap_or(line).to_string())
+            }
             Expr::Unary { op: UnaryOp::Not, expr } => Value::Bool(!self.eval(expr, frame)?.as_bool()),
             Expr::Unary { op: UnaryOp::Neg, expr } => self.eval(expr, frame)?.negate(),
             // `and` / `or` short-circuit, like C's `&&` / `||`.
@@ -133,4 +145,8 @@ impl Interpreter<'_, '_> {
             }
         })
     }
+}
+
+fn io_error(e: std::io::Error) -> String {
+    format!("input/output error: {}", e)
 }

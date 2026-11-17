@@ -9,7 +9,9 @@
 //! | additive   | `+ -`                        |
 //! | multiply   | `* / mod`                    |
 //! | unary      | `-` (prefix)                 |
-//! | primary    | literal, variable, call `F(...)`, `( ... )` |
+//! | primary    | literal, variable, call `F(...)`, built-in, `( ... )` |
+//!
+//! Built-ins: `str(x)`, `int(x)`, `float(x)`, `read()`, `read(prompt)`.
 
 use crate::ast::{BinOp, Expr, Type, UnaryOp};
 
@@ -21,6 +23,9 @@ const KEYWORDS: &[&str] = &[
     "set", "keep", "reuse", "show", "fnc", "if", "else", "while", "return", "true", "false", "and", "or",
     "not", "mod",
 ];
+
+/// Built-in functions; user functions cannot use these names.
+pub const BUILTINS: &[&str] = &["str", "int", "float", "read"];
 
 const COMPARISONS: &[(&str, BinOp)] = &[
     ("=", BinOp::Eq),
@@ -41,10 +46,10 @@ pub fn parse_expr(src: &str, scope: &mut Scope, line: usize, access: Access) -> 
     if let Some(t) = p.tokens.get(p.pos) {
         return Err(format!("unexpected `{}` in `{}`", t, src));
     }
-    if let (Expr::Var { name, .. }, Access::Move) = (&expr, access) {
-        p.scope.access(name, line, Access::Move)?;
+    match expr {
+        Expr::Var { name, ty, .. } if access == Access::Move => Ok(p.take(name, ty)?),
+        expr => Ok(expr),
     }
-    Ok(expr)
 }
 
 /// A call used as a statement: `Name(args)` (without `;`). The function may
@@ -218,6 +223,30 @@ impl ExprParser<'_> {
             Some(Token::Ident(word)) => match word.as_str() {
                 "true" => Ok(Expr::Bool(true)),
                 "false" => Ok(Expr::Bool(false)),
+                "str" | "int" | "float" if self.eat("(") => {
+                    let to = Type::parse(&word).expect("a type name");
+                    let expr = self.or()?;
+                    self.close_call(&word)?;
+                    let ok = match to {
+                        Type::Str => true,
+                        _ => matches!(expr.ty(), Type::Str | Type::Int | Type::Float),
+                    };
+                    if !ok {
+                        return Err(format!("cannot convert {} to {}", expr.ty().name(), to.name()));
+                    }
+                    Ok(Expr::Convert { to, expr: Box::new(expr) })
+                }
+                "read" if self.eat("(") => {
+                    if self.eat(")") {
+                        return Ok(Expr::Read { prompt: None });
+                    }
+                    let prompt = self.or()?;
+                    self.close_call("read")?;
+                    if prompt.ty() != Type::Str {
+                        return Err(format!("the prompt of `read` must be a str, got {}", prompt.ty().name()));
+                    }
+                    Ok(Expr::Read { prompt: Some(Box::new(prompt)) })
+                }
                 _ if self.eat("(") => {
                     parse_identifier(&word)?;
                     let (args, ret) = self.call(&word)?;
@@ -229,7 +258,7 @@ impl ExprParser<'_> {
                 _ => {
                     let name = parse_identifier(&word)?;
                     let ty = self.scope.access(&name, self.line, Access::Read)?;
-                    Ok(Expr::Var { name, ty })
+                    Ok(Expr::Var { name, ty, moved: false })
                 }
             },
             Some(Token::Sym("(")) => {
@@ -255,10 +284,10 @@ impl ExprParser<'_> {
         let mut args = Vec::new();
         if !self.eat(")") {
             loop {
-                let arg = self.or()?;
-                if let Expr::Var { name, .. } = &arg {
-                    self.scope.access(name, self.line, Access::Move)?;
-                }
+                let arg = match self.or()? {
+                    Expr::Var { name, ty, .. } => self.take(name, ty)?,
+                    arg => arg,
+                };
                 args.push(arg);
                 if self.eat(")") {
                     break;
@@ -272,6 +301,19 @@ impl ExprParser<'_> {
         let ret = sig.ret;
         Ok((check_call(sig, args)?, ret))
     }
+
+    /// A bare variable given away (`set y: T = x;`, `F(x)`, `return x;`).
+    /// Owned variables are moved; `keep`/`reuse`/borrows are copied.
+    fn take(&mut self, name: String, ty: Type) -> Result<Expr, String> {
+        self.scope.access(&name, self.line, Access::Move)?;
+        let moved = self.scope.is_owned(&name);
+        Ok(Expr::Var { name, ty, moved })
+    }
+
+    /// The `)` that closes a built-in call.
+    fn close_call(&mut self, name: &str) -> Result<(), String> {
+        if self.eat(")") { Ok(()) } else { Err(format!("`{}` takes one value, expected `)`", name)) }
+    }
 }
 
 fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
@@ -281,8 +323,15 @@ fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
 /// `+ - * /` need numbers; `mod` needs two ints.
 fn arithmetic(op: BinOp, lhs: Expr, rhs: Expr) -> Result<Expr, String> {
     let (lt, rt) = (lhs.ty(), rhs.ty());
-    if op == BinOp::Add && lt == Type::Str && rt == Type::Str {
-        return Err("joining strings with `+` is not supported yet".into());
+    if op == BinOp::Add && (lt == Type::Str || rt == Type::Str) {
+        if lt == rt {
+            return Ok(binary(op, lhs, rhs));
+        }
+        return Err(format!(
+            "`+` joins two strings or adds two numbers, got {} and {}; convert with str(...)",
+            lt.name(),
+            rt.name()
+        ));
     }
     let ok = match op {
         BinOp::Mod => lt == Type::Int && rt == Type::Int,
