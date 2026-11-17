@@ -21,7 +21,7 @@
       {
         "id": "meng",
         "aliases": ["Meng", "meng"],
-        "extensions": [".ml", ".meng"],
+        "extensions": [".meng"],
         "configuration": "./language-configuration.json"
       }
     ],

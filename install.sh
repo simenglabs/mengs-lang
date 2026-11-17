@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
 # Meng installer: builds the compiler and makes `meng` available in your shell.
 #
-#   curl -sSf https://raw.githubusercontent.com/menglabs/mengs-lang/main/install.sh | sh
+#   curl -sSf https://raw.githubusercontent.com/simenglabs/mengs-lang/main/install.sh | sh
 #   curl -sSf .../install.sh | sh -s -- --vscode   also install the VS Code extension
 #
 #   ./install.sh [--vscode]                        from a local checkout
 set -e
 
 # Where to fetch the source from when the script is piped from curl.
-REPO_URL="${MENG_REPO:-https://github.com/menglabs/mengs-lang.git}"
+REPO_URL="${MENG_REPO:-https://github.com/simenglabs/mengs-lang.git}"
 
 BIN_DIR="$HOME/.cargo/bin"
 USER_PATH="$PATH"   # PATH as the user's shell sees it (before we touch it)
@@ -113,4 +113,4 @@ else
   echo "    Try:"
 fi
 echo "      meng            # show usage"
-echo "      meng interpret hello.ml"
+echo "      meng interpret hello.meng"

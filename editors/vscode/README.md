@@ -1,6 +1,6 @@
 # Meng for VS Code
 
-Language support for [Meng](../../README.md) (`.ml`, `.meng`).
+Language support for [Meng](../../README.md) (`.meng`).
 
 ## Features
 
@@ -31,4 +31,3 @@ Reinstall after changing the extension source.
 
 - Only the first error is shown (the compiler stops at the first error).
 - Completion does not know about `if`-block scope or moved variables.
-- `.ml` is also used by OCaml; use `.meng` if both extensions are installed.

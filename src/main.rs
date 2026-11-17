@@ -19,10 +19,10 @@ enum Mode {
 
 fn print_usage() {
     println!("Usage:");
-    println!("  meng compile <file.ml>    - Compile to a binary (via GCC)");
-    println!("  meng run <file.ml>        - Compile and run immediately");
-    println!("  meng interpret <file.ml>  - Run directly with the interpreter (no GCC)");
-    println!("  meng check <file.ml>      - Only check for errors (use `-` to read stdin)");
+    println!("  meng compile <file.meng>    - Compile to a binary (via GCC)");
+    println!("  meng run <file.meng>        - Compile and run immediately");
+    println!("  meng interpret <file.meng>  - Run directly with the interpreter (no GCC)");
+    println!("  meng check <file.meng>      - Only check for errors (use `-` to read stdin)");
 }
 
 fn read_source(filename: &str) -> io::Result<String> {
@@ -54,6 +54,10 @@ fn main() {
         }
     };
     let filename = &args[2];
+    if filename != "-" && Path::new(filename).extension().and_then(|e| e.to_str()) != Some("meng") {
+        eprintln!("[ERROR] Meng source files must use the .meng extension: {}", filename);
+        process::exit(1);
+    }
 
     let code = read_source(filename).unwrap_or_else(|_| {
         eprintln!("[ERROR] Failed to read file: {}", filename);

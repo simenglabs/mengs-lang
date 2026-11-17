@@ -1,7 +1,7 @@
-# Meng
+# Meng Language
 
 A small, statically typed toy language with compile-time ownership rules.
-Meng programs (`.ml`) are either run by a built-in interpreter or compiled
+Meng programs (`.meng`) are either run by a built-in interpreter or compiled
 to C and built into a native binary with GCC.
 
 ```meng
@@ -20,9 +20,9 @@ Greet(owner, "Good morning");
 Requirements: Rust (2024 edition) and, for `compile`/`run`, GCC.
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/menglabs/mengs-lang/main/install.sh | sh
+curl -sSf https://raw.githubusercontent.com/simenglabs/mengs-lang/main/install.sh | sh
 # with the VS Code extension:
-curl -sSf https://raw.githubusercontent.com/menglabs/mengs-lang/main/install.sh | sh -s -- --vscode
+curl -sSf https://raw.githubusercontent.com/simenglabs/mengs-lang/main/install.sh | sh -s -- --vscode
 ```
 
 From a local checkout: `./install.sh` (or `./install.sh --vscode`).
@@ -31,10 +31,10 @@ Open a new terminal afterwards if the installer says it updated your PATH.
 To uninstall: `cargo uninstall mengs-lang`.
 
 ```bash
-meng interpret test/main.ml     # run with the interpreter (no GCC)
-meng run test/main.ml           # compile to a binary via GCC and run it
-meng compile test/main.ml       # compile only (binary named after the file)
-meng check test/main.ml         # type/ownership check only (`-` reads stdin)
+meng interpret test/main.meng     # run with the interpreter (no GCC)
+meng run test/main.meng           # compile to a binary via GCC and run it
+meng compile test/main.meng       # compile only (binary named after the file)
+meng check test/main.meng         # type/ownership check only (`-` reads stdin)
 ```
 
 The interpreter and the compiled binary produce identical output.
@@ -112,7 +112,7 @@ Welcome("Meng");
 Welcome("Meng", "Hey", 2);
 ```
 
-See [`test/main.ml`](test/main.ml) for a full tour.
+See [`test/main.meng`](test/main.meng) for a full tour.
 
 ## Project layout
 
@@ -125,7 +125,7 @@ src/
   interpreter/     tree-walking interpreter
   backend.rs       writes output.c and calls GCC
 editors/vscode/    VS Code extension
-test/main.ml       example program
+test/main.meng       example program
 ```
 
 Run the tests with `cargo test`.

@@ -1,5 +1,7 @@
 # TODO
 
+See [PLAN.md](PLAN.md) for the order and approach.
+
 ## High priority
 - [ ] Commit to git (everything in the repo is still untracked)
 - [ ] Arithmetic: `+ - * / %`, string concatenation
@@ -23,4 +25,3 @@
 - [ ] Modules / `import` across files
 - [ ] Column in error messages (not just the line)
 - [ ] Extension: README, icon, publish to the Marketplace
-- [ ] Default extension `.meng` (`.ml` clashes with OCaml)
