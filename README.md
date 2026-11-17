@@ -27,7 +27,7 @@ Open a new terminal if the installer updates your PATH.
 meng interpret test/main.meng
 ```
 
-The CLI also supports `check`, `compile`, and `run`.
+The CLI also supports `check`, `compile`, `run`, and `emit` (prints the generated C).
 Language syntax and usage guides will live in the documentation.
 
 ## Development

@@ -1,14 +1,16 @@
+use std::env;
 use std::fs;
-use std::process::Command;
+use std::process::{self, Command};
 
-const C_OUTPUT: &str = "output.c";
-
-/// Write the C code to disk and compile it into a binary with GCC.
+/// Compile C code into a binary with GCC. The C file goes to a temporary
+/// folder and is removed afterwards (kept if GCC fails, for inspection).
 pub fn build(c_code: &str, output_binary: &str) -> Result<(), String> {
-    fs::write(C_OUTPUT, c_code).map_err(|e| format!("Failed to write {}: {}", C_OUTPUT, e))?;
+    let c_file = env::temp_dir().join(format!("meng-{}.c", process::id()));
+    fs::write(&c_file, c_code).map_err(|e| format!("Failed to write {}: {}", c_file.display(), e))?;
 
     let status = Command::new("gcc")
-        .arg(C_OUTPUT)
+        .arg(&c_file)
+        .arg("-O2")
         // `if x = x` in Meng is valid; don't surface a C warning about generated code.
         .arg("-Wno-tautological-compare")
         .arg("-o")
@@ -16,8 +18,12 @@ pub fn build(c_code: &str, output_binary: &str) -> Result<(), String> {
         .status();
 
     match status {
-        Ok(s) if s.success() => Ok(()),
-        _ => Err("GCC compilation failed.".to_string()),
+        Ok(s) if s.success() => {
+            let _ = fs::remove_file(&c_file);
+            Ok(())
+        }
+        Ok(_) => Err(format!("GCC compilation failed (generated C kept at {}).", c_file.display())),
+        Err(e) => Err(format!("Could not run gcc: {}", e)),
     }
 }
 
