@@ -59,7 +59,7 @@ show("100% ready");   % a comment after a statement %
 
 ## Types and variables
 
-The scalar types are `str`, `int`, `float`, and `bool`. An array of a type is written
+The basic types are `str`, `int`, `float`, and `bool`. An array of a type is written
 `[int]`, `[float]`, `[str]`, or `[bool]`. Every variable is declared with `set`, a name,
 a type, and a value.
 

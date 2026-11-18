@@ -42,7 +42,9 @@ Running `./install.sh` from a local checkout always builds from that checkout.
 | `meng deps` | install, update, and remove packages to match `deps.meow` |
 
 Errors are printed as `[ERROR] file:line:column: message`, followed by the source line
-and a caret. `meng check` reports all errors at once. The interpreter and a compiled
+and a caret. Warnings use the same form with `[WARN] file:line:column: message`; they do
+not stop compilation, and `meng check` still succeeds when there are only warnings.
+`meng check` reports all errors and warnings at once. The interpreter and a compiled
 program print the same output.
 
 ## Dependencies
@@ -79,7 +81,7 @@ by packaging it yourself (see [editors/vscode/README.md](../../editors/vscode/RE
 It provides:
 
 - syntax highlighting
-- live errors from `meng check`, underlined at their column
+- live errors and warnings from `meng check`, underlined at their column
 - completion for keywords, types, built-ins, functions, and the variables usable at the
   cursor (based on `meng symbols`)
 - hover and signature help

@@ -18,7 +18,7 @@ results are the "done" items below.
 
 - ✅ v1 scope, platforms, compatibility policy ([D1](docs/design/v1-decisions.md#d1-v1-scope-platforms-and-compatibility))
 - ✅ Concurrency model ([D2](docs/design/v1-decisions.md#d2-concurrency-model))
-- ✅ Ownership of heap data ([D3](docs/design/v1-decisions.md#d3-ownership-of-data)); implementing it is in progress, see milestone 2
+- ✅ Ownership of heap data ([D3](docs/design/v1-decisions.md#d3-ownership-of-data)); implemented for the current types, see milestone 2
 - ✅ Request lifetimes and caches ([D4](docs/design/v1-decisions.md#d4-request-lifetimes-and-caches))
 - ✅ Native libraries ([D6](docs/design/v1-decisions.md#d6-native-libraries)), errors ([D5](docs/design/v1-decisions.md#d5-errors)), parser ([D7](docs/design/v1-decisions.md#d7-parser-before-structs-maps-and-results))
 - ✅ PLAN.md follows the milestones and syntax guides live in `docs/` ([D8](docs/design/v1-decisions.md#d8-documentation-and-plan))
@@ -31,8 +31,8 @@ results are the "done" items below.
 - ✅ Modules and packages (`use "file.meng";`, `use "name";`)
 - ◐ Iteration: `while` is done; `for`, `break`, `continue` are todo
 - ◐ Integer overflow and numeric conversion: invalid conversions are runtime errors; overflow behavior and checked parsing (needs results) are todo
-- ◐ Ownership rules ([D3](docs/design/v1-decisions.md#d3-ownership-of-data)): `keep`, `reuse`, borrows, and copies exist; scalars copying and `keep` parameters borrowing are todo (foundations plan, tasks 2 and 3)
-- ◐ Parser ([D7](docs/design/v1-decisions.md#d7-parser-before-structs-maps-and-results)): token-based expressions are done; the token-based statement parser (multi-line statements, exact columns) is todo (foundations plan, tasks 4 and 5)
+- ✅ Ownership rules ([D3](docs/design/v1-decisions.md#d3-ownership-of-data)): `keep`, `reuse`, borrows, copies, scalars copying, and `keep` parameters borrowing are done; the rules for structs, maps, channels, and `spawn` come with those features
+- ✅ Parser ([D7](docs/design/v1-decisions.md#d7-parser-before-structs-maps-and-results)): token-based expressions and statements (multi-line statements, exact columns) are done
 - ◐ Regression tests for use-after-move, invalid borrows, double frees, and leaks: parser tests cover moves and borrows, CI runs generated C under AddressSanitizer; more leak tests are todo
 
 ## 3. Build the service runtime and standard library
@@ -71,7 +71,7 @@ results are the "done" items below.
 
 ## 7. Release tooling, documentation, and v1 acceptance
 
-- ✅ Diagnostics with file / line / column, source excerpts, and ownership hints (exact columns for every statement come with D7)
+- ✅ Diagnostics with file / line / column, source excerpts, and ownership hints, with exact columns for every statement (D7)
 - ◐ Build directory and commands: generated C goes to a temp folder and `meng emit` prints it; project build / test commands are todo
 - ◐ CI: interpreter versus compiled output and AddressSanitizer are checked; standard library and reference service checks are todo
 - ◐ Equivalent behavior across backends: compared on `test/main.meng`; error and cleanup paths are todo
