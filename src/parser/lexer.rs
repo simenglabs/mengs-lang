@@ -1,4 +1,4 @@
-//! Tokenizer for expressions: `a + 2 * (b - 1.5) >= 10 and not done`.
+//! Tokenizer: `set a: int = b * (2 - 1.5);` -> tokens with their line and column.
 
 use std::fmt;
 
@@ -31,39 +31,8 @@ impl fmt::Display for Token {
     }
 }
 
-pub fn tokenize(src: &str) -> Result<Vec<Token>, String> {
-    let mut tokens = Vec::new();
-    let mut rest = src;
-    loop {
-        rest = rest.trim_start();
-        let Some(c) = rest.chars().next() else {
-            return Ok(tokens);
-        };
-        let (token, len) = if c == '"' {
-            lex_string(rest)?
-        } else if c.is_ascii_digit() {
-            lex_number(rest)?
-        } else if c.is_ascii_alphabetic() || c == '_' {
-            let len = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            (Token::Ident(rest[..len].to_string()), len)
-        } else if let Some(sym) = SYMBOLS.iter().find(|s| rest.starts_with(**s)) {
-            (Token::Sym(sym), sym.len())
-        } else {
-            return Err(format!("unexpected character `{}`", c));
-        };
-        tokens.push(token);
-        rest = &rest[len..];
-    }
-}
-
 /// `42` or `3.14` (a `.` must be followed by a digit to make a float).
-fn lex_number(s: &str) -> Result<(Token, usize), String> {
-    lex_number_at(s).map_err(|(message, _)| message)
-}
-
-/// Like `lex_number`; the error carries the byte offset of the problem.
+/// The error carries the byte offset of the problem.
 fn lex_number_at(s: &str) -> Result<(Token, usize), (String, usize)> {
     let digits = |s: &str| s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     let mut len = digits(s);
@@ -80,12 +49,7 @@ fn lex_number_at(s: &str) -> Result<(Token, usize), (String, usize)> {
     token.map(|t| (t, len)).ok_or_else(|| (format!("invalid number: `{}`", text), 0))
 }
 
-/// A quoted string with the escapes `\"`, `\\`, `\n`, `\t`, `\r`.
-fn lex_string(s: &str) -> Result<(Token, usize), String> {
-    lex_string_at(s).map_err(|(message, _)| message)
-}
-
-/// Like `lex_string`; the error carries the byte offset of the problem
+/// A quoted string with the escapes `\"`, `\\`, `\n`, `\t`, `\r`. The error carries the byte offset of the problem
 /// (an unknown escape points at its backslash, an unclosed string at the opening quote).
 fn lex_string_at(s: &str) -> Result<(Token, usize), (String, usize)> {
     let mut out = String::new();
@@ -108,12 +72,11 @@ fn lex_string_at(s: &str) -> Result<(Token, usize), (String, usize)> {
     Err(("string is not closed with a quote `\"`".to_string(), 0))
 }
 
-/// Symbols that only `tokenize_source` knows; longest first, tried before `SYMBOLS`.
+/// Statement symbols; longest first, tried before `SYMBOLS`.
 const STATEMENT_SYMBOLS: &[&str] = &["()=>", "<==", "->", ";", ":"];
 
 /// A token with its 1-based line and column (columns count bytes).
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // used by the statement parser (Task 5)
 pub struct Spanned {
     pub token: Token,
     pub line: usize,
@@ -122,7 +85,6 @@ pub struct Spanned {
 
 /// Tokenize a whole comment-free source. `<-` is one token only at the start of a
 /// statement (no previous token, or after `;` or `->`); elsewhere `a <-1` is `a < -1`.
-#[allow(dead_code)] // used by the statement parser (Task 5)
 pub fn tokenize_source(code: &str) -> Result<Vec<Spanned>, Diagnostic> {
     let mut tokens: Vec<Spanned> = Vec::new();
     let (mut pos, mut line, mut line_start) = (0, 1, 0);

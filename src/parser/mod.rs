@@ -2,10 +2,10 @@
 //!
 //! - `mod.rs`      — statement reader (collects every error), blocks (`fnc`, `if`/`else`, `while`), `return`, program structure
 //! - `comments.rs` — strips `% ... %` comments before parsing
-//! - `diagnostic.rs` — errors with line/column, splitting lines into statements
-//! - `stmt.rs`     — single-line statements (`set`, reassign, borrow, copy, `show`, calls) and function headers
-//! - `lexer.rs`    — tokens for expressions (numbers, strings, names, operators)
-//! - `expr.rs`     — expressions by precedence, type checks, calls, identifiers
+//! - `lexer.rs`    — tokens with their line and column
+//! - `diagnostic.rs` — errors with line/column, the tokens of a file, splitting them into statements
+//! - `stmt.rs`     — simple statements (`set`, reassign, borrow, copy, `show`, calls) and function headers
+//! - `expr.rs`     — the token cursor; expressions by precedence, type checks, calls, identifiers
 //! - `scope.rs`    — variable tracking (types, ownership: move / reuse / borrow / reassign)
 //! - `check.rs`    — function call checks (argument count/types, defaults)
 //! - `symbols.rs`  — functions, variables, and ownership events for editors (`meng symbols`)
@@ -29,10 +29,10 @@ use std::rc::Rc;
 
 use crate::ast::{Expr, Function, Program, Signature, Stmt, always_returns};
 pub use diagnostic::{Diagnostic, Severity};
-use diagnostic::{Piece, diagnostic, split_pieces};
-use expr::{BUILTINS, parse_condition, parse_typed};
+use diagnostic::{Source, Statement};
+use expr::{BUILTINS, ExprParser};
 use scope::{Access, Kind, Scope};
-use stmt::{check_assign, declare_after_error, parse_fn_header, parse_stmt};
+use stmt::{Header, check_assign, declare_after_error, declared_name, incomplete, parse_fn_header, parse_stmt};
 pub use comments::strip_comments;
 pub use modules::{SourceError, parse_file, symbols_file};
 pub use symbols::Symbols;
@@ -69,16 +69,17 @@ fn analyze(code: &str, imported: &Imported, library: bool) -> (Result<Program, V
         Ok(code) => code,
         Err(e) => return (Err(vec![e]), Vec::new(), Symbols::default()),
     };
-    let pieces = split_pieces(&code);
+    let (src, mut errors) = Source::new(&code);
+    let statements = src.statements();
     let last_line = code.lines().count().max(1);
-    let mut errors = Vec::new();
-    let (mut functions, headers) = collect_signatures(&pieces, imported, &mut errors);
+    let (mut functions, headers) = collect_signatures(&src, &statements, imported, &mut errors);
     for (name, (sig, _)) in imported {
         functions.entry(name.clone()).or_insert_with(|| sig.clone());
     }
     let mut parser = Parser {
         library,
-        pieces,
+        src: &src,
+        statements,
         pos: 0,
         functions: Rc::new(functions),
         headers,
@@ -104,71 +105,63 @@ fn analyze(code: &str, imported: &Imported, library: bool) -> (Result<Program, V
 
 /// First pass: read every function header, so calls (and their return types)
 /// can be checked even when the function is defined further down.
-/// Returns the signatures by name, and by the index of their header piece.
+/// Returns the signatures by name, and the headers by the index of their statement.
 fn collect_signatures(
-    pieces: &[Piece],
+    src: &Source,
+    statements: &[Statement],
     imported: &Imported,
     errors: &mut Vec<Diagnostic>,
-) -> (HashMap<String, Signature>, HashMap<usize, Signature>) {
+) -> (HashMap<String, Signature>, HashMap<usize, Header>) {
     let (mut functions, mut headers) = (HashMap::new(), HashMap::new());
-    for (i, piece) in pieces.iter().enumerate() {
-        let Some(header) = piece.text.strip_prefix("fnc ") else { continue };
-        let sig = match parse_fn_header(header) {
-            Ok(sig) if BUILTINS.contains(&sig.name.as_str()) => {
-                Err(format!("`{}` is a built-in function and cannot be redefined", sig.name))
+    for (i, &stmt) in statements.iter().enumerate() {
+        if !src.is(stmt.start, "fnc") {
+            continue;
+        }
+        let header = parse_fn_header(src, stmt).and_then(|h| {
+            let name = &h.sig.name;
+            let clash = if BUILTINS.contains(&name.as_str()) {
+                Some(format!("`{}` is a built-in function and cannot be redefined", name))
+            } else if functions.contains_key(name) {
+                Some(format!("function `{}` is already defined", name))
+            } else {
+                imported.get(name).map(|(_, file)| format!("function `{}` is already defined in `{}`", name, file))
+            };
+            match clash {
+                Some(message) => Err(src.error(h.name_at, message)),
+                None => Ok(h),
             }
-            Ok(sig) if functions.contains_key(&sig.name) => Err(format!("function `{}` is already defined", sig.name)),
-            Ok(sig) if imported.contains_key(&sig.name) => {
-                Err(format!("function `{}` is already defined in `{}`", sig.name, imported[&sig.name].1))
+        });
+        match header {
+            Ok(h) => {
+                functions.insert(h.sig.name.clone(), h.sig.clone());
+                headers.insert(i, h);
             }
-            other => other,
-        };
-        match sig {
-            Ok(sig) => {
-                functions.insert(sig.name.clone(), sig.clone());
-                headers.insert(i, sig);
-            }
-            Err(e) => errors.push(diagnostic(*piece, e)),
+            Err(e) if !src.is_broken(stmt) => errors.push(e),
+            Err(_) => {}
         }
     }
     (functions, headers)
 }
 
 /// How a block was closed.
-enum BlockEnd<'a> {
+enum BlockEnd {
     /// `<-;` (or the end of the file, already reported)
     End,
     /// `<- else ->`
-    Else(Piece<'a>),
-    /// `<- else if ... ->` (with the condition)
-    ElseIf(Piece<'a>, &'a str),
-}
-
-/// Recognize a block terminator: `<-;`, `<- else ->`, or `<- else if ... ->`.
-fn parse_block_end(piece: Piece<'_>) -> Option<Result<BlockEnd<'_>, String>> {
-    let rest = piece.text.strip_prefix("<-")?.trim();
-    if rest == ";" {
-        return Some(Ok(BlockEnd::End));
-    }
-    if let Some(rest) = rest.strip_prefix("else").map(str::trim) {
-        if rest == "->" {
-            return Some(Ok(BlockEnd::Else(piece)));
-        }
-        if let Some(cond) = rest.strip_prefix("if ") {
-            return Some(Ok(BlockEnd::ElseIf(piece, cond)));
-        }
-    }
-    Some(Err("invalid block terminator, use `<-;`, `<- else ->`, or `<- else if a < b ->`".into()))
+    Else(Statement),
+    /// `<- else if ... ->`, with its condition (the tokens after `if`)
+    ElseIf(Statement, Statement),
 }
 
 struct Parser<'a> {
     /// An imported file: only functions and `use` at the top level.
     library: bool,
-    pieces: Vec<Piece<'a>>,
+    src: &'a Source,
+    statements: Vec<Statement>,
     pos: usize,
     functions: Rc<HashMap<String, Signature>>,
-    /// Valid function headers, by piece index.
-    headers: HashMap<usize, Signature>,
+    /// Valid function headers, by statement index.
+    headers: HashMap<usize, Header>,
     /// The function being parsed (for `return`), `None` at the top level.
     current: Option<Signature>,
     errors: Vec<Diagnostic>,
@@ -179,40 +172,68 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn next_piece(&mut self) -> Option<Piece<'a>> {
-        let piece = self.pieces.get(self.pos).copied();
+    fn next_stmt(&mut self) -> Option<Statement> {
+        let stmt = self.statements.get(self.pos).copied();
         self.pos += 1;
-        piece
+        stmt
     }
 
-    fn error(&mut self, piece: Piece, message: impl Into<String>) {
-        self.errors.push(diagnostic(piece, message.into()));
+    /// Whether a statement starts with the word or symbol `s`.
+    fn starts(&self, stmt: Statement, s: &str) -> bool {
+        self.src.is(stmt.start, s)
     }
 
-    fn warn(&mut self, piece: Piece, message: impl Into<String>) {
-        let mut d = diagnostic(piece, message.into());
+    /// Whether a statement opens a block (ends with `->`).
+    fn opens_block(&self, stmt: Statement) -> bool {
+        self.src.is(stmt.end - 1, "->")
+    }
+
+    /// Record an error about a statement, unless the statement has a lexing
+    /// error (already reported, and the rest of its line is gone).
+    fn fail(&mut self, stmt: Statement, error: Diagnostic) {
+        if !self.src.is_broken(stmt) {
+            self.errors.push(error);
+        }
+    }
+
+    /// Record an error at token `at` of a statement.
+    fn error(&mut self, stmt: Statement, at: usize, message: impl Into<String>) {
+        let error = self.src.error(at, message);
+        self.fail(stmt, error);
+    }
+
+    fn warn(&mut self, at: usize, message: impl Into<String>) {
+        let mut d = self.src.error(at, message);
         d.severity = Severity::Warning;
         self.errors.push(d);
     }
 
-    /// `reuse` on a value that is always copied has no effect.
-    fn warn_useless_reuse(&mut self, piece: Piece, ty: crate::ast::Type) {
+    /// `reuse` on a value that is always copied has no effect (`at`: the declared name).
+    fn warn_useless_reuse(&mut self, at: usize, ty: crate::ast::Type) {
         if !ty.is_heap() {
-            self.warn(piece, format!("`reuse` has no effect on {} values (they are always copied)", ty.name()));
+            self.warn(at, format!("`reuse` has no effect on {} values (they are always copied)", ty.name()));
         }
     }
 
-    /// An error on a given line (e.g. where a variable was moved inside a loop).
-    fn error_on_line(&mut self, line: usize, fallback: Piece, message: String) {
-        let piece = self.pieces.iter().find(|p| p.line == line).copied().unwrap_or(fallback);
-        self.error(piece, message);
+    /// An error at the first `name` on a given line (e.g. where a variable was
+    /// moved inside a loop), or at the first token of that line.
+    fn error_on_line(&mut self, line: usize, name: &str, fallback: Statement, message: String) {
+        let tokens = &self.src.tokens;
+        let is_name = |t: &lexer::Spanned| t.line == line && matches!(&t.token, lexer::Token::Ident(w) if w == name);
+        let at = tokens
+            .iter()
+            .position(is_name)
+            .or_else(|| tokens.iter().position(|t| t.line == line))
+            .unwrap_or(fallback.start);
+        self.errors.push(self.src.error(at, message));
     }
 
-    /// Record a declared variable (visible until its block closes).
-    fn declare_symbol(&mut self, piece: Piece, name: &str, ty: crate::ast::Type, kind: &'static str) {
-        let column = diagnostic(piece, format!("`{}`", name)).column;
+    /// Record a declared variable (visible until its block closes); `at` is its name's token.
+    fn declare_symbol(&mut self, at: usize, name: &str, ty: crate::ast::Type, kind: &'static str) {
+        let token = &self.src.tokens[at];
+        let (line, column) = (token.line, token.column);
         let function = self.current.as_ref().map(|f| f.name.clone());
-        let symbol = VariableSymbol { name: name.to_string(), ty: ty.name(), kind, line: piece.line, column, end: piece.line, function };
+        let symbol = VariableSymbol { name: name.to_string(), ty: ty.name(), kind, line, column, end: line, function };
         self.symbols.variables.push(symbol);
         if let Some(block) = self.blocks.last_mut() {
             block.push(self.symbols.variables.len() - 1);
@@ -226,9 +247,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Line of the piece read last (the block terminator after `parse_block`).
+    /// Line of the statement read last (the block terminator after `parse_block`).
     fn last_line(&self) -> usize {
-        self.pieces.get(self.pos.saturating_sub(1).min(self.pieces.len().saturating_sub(1))).map_or(1, |p| p.line)
+        let last = self.pos.saturating_sub(1).min(self.statements.len().saturating_sub(1));
+        self.statements.get(last).map_or(1, |s| self.src.line(s.start))
     }
 
     fn parse_program(&mut self, last_line: usize) -> Program {
@@ -236,26 +258,27 @@ impl<'a> Parser<'a> {
         let mut main_scope = Scope::new(self.functions.clone(), self.events.clone());
         self.blocks.push(Vec::new());
 
-        while let Some(piece) = self.next_piece() {
-            if piece.text.starts_with("fnc ") {
+        while let Some(stmt) = self.next_stmt() {
+            if self.starts(stmt, "fnc") {
                 match self.headers.get(&(self.pos - 1)).cloned() {
-                    Some(sig) => program.functions.push(self.parse_function(piece, sig)),
+                    Some(header) => program.functions.push(self.parse_function(stmt, header)),
                     None => self.skip_block(), // header error already reported
                 }
-            } else if parse_block_end(piece).is_some() {
-                self.error(piece, "block terminator without a matching `fnc`/`if`/`while`");
-            } else if piece.text.starts_with("use ") {
+            } else if self.starts(stmt, "<-") {
+                self.error(stmt, stmt.start, "block terminator without a matching `fnc`/`if`/`while`");
+            } else if self.starts(stmt, "use") {
                 // Loaded by `modules.rs`; only the syntax is checked here.
-                if let Err(e) = modules::parse_use(piece.text) {
-                    self.error(piece, e);
+                let tokens: Vec<_> = self.src.tokens[stmt.start..stmt.end].iter().map(|t| t.token.clone()).collect();
+                if let Err(e) = modules::parse_use(&tokens) {
+                    self.error(stmt, stmt.start, e);
                 }
             } else if self.library {
-                self.error(piece, "an imported file can only contain functions and `use`");
-                if piece.text.ends_with("->") {
+                self.error(stmt, stmt.start, "an imported file can only contain functions and `use`");
+                if self.opens_block(stmt) {
                     self.skip_block();
                 }
-            } else if let Some(stmt) = self.parse_stmt_line(piece, &mut main_scope) {
-                program.main.push(stmt);
+            } else if let Some(s) = self.parse_stmt_line(stmt, &mut main_scope) {
+                program.main.push(s);
             }
         }
         self.close_symbols(last_line);
@@ -265,11 +288,11 @@ impl<'a> Parser<'a> {
     /// Skip the body of a block whose opener could not be parsed.
     fn skip_block(&mut self) {
         let mut depth = 1;
-        while let Some(piece) = self.next_piece() {
-            let text = piece.text;
-            if text.starts_with("<-") && !text.ends_with("->") {
+        while let Some(stmt) = self.next_stmt() {
+            let (closes, opens) = (self.starts(stmt, "<-"), self.opens_block(stmt));
+            if closes && !opens {
                 depth -= 1;
-            } else if !text.starts_with("<-") && text.ends_with("->") {
+            } else if !closes && opens {
                 depth += 1;
             }
             if depth == 0 {
@@ -279,42 +302,73 @@ impl<'a> Parser<'a> {
     }
 
     /// `fnc Name(params)[: type] ->` followed by its body up to `<-;`.
-    fn parse_function(&mut self, opener: Piece<'a>, sig: Signature) -> Function {
+    fn parse_function(&mut self, opener: Statement, header: Header) -> Function {
+        let Header { sig, name_at, params_at } = header;
         let mut scope = Scope::new(self.functions.clone(), self.events.clone());
         self.current = Some(sig.clone());
         self.blocks.push(Vec::new());
-        for p in &sig.params {
-            let kind = if p.keep && p.ty.is_heap() { Kind::KeepParam } else if p.keep { Kind::Keep } else if p.reuse { Kind::Reuse } else { Kind::Owned };
+        for (p, &at) in sig.params.iter().zip(&params_at) {
+            let kind = if p.keep && p.ty.is_heap() {
+                Kind::KeepParam
+            } else if p.keep {
+                Kind::Keep
+            } else if p.reuse {
+                Kind::Reuse
+            } else {
+                Kind::Owned
+            };
             if let Err(e) = scope.declare(&p.name, p.ty, kind) {
-                self.error(opener, e);
+                self.error(opener, at, e);
             }
             if p.reuse {
-                self.warn_useless_reuse(opener, p.ty);
+                self.warn_useless_reuse(at, p.ty);
             }
             let label = if p.keep { "keep" } else if p.reuse { "reuse" } else { "param" };
-            self.declare_symbol(opener, &p.name, p.ty, label);
+            self.declare_symbol(at, &p.name, p.ty, label);
         }
         let (body, end) = self.parse_block(opener, &format!("function `{}`", sig.name), &mut scope);
         let end_line = self.last_line();
         self.close_symbols(end_line);
         self.current = None;
-        let column = diagnostic(opener, format!("`{}`", sig.name)).column;
-        self.symbols.functions.push(FunctionSymbol { sig: sig.clone(), file: None, line: opener.line, column, end: end_line });
-        if let BlockEnd::Else(p) | BlockEnd::ElseIf(p, _) = end {
-            self.error(p, "`else` without `if`");
+        let name_token = &self.src.tokens[name_at];
+        let (line, column) = (name_token.line, name_token.column);
+        self.symbols.functions.push(FunctionSymbol { sig: sig.clone(), file: None, line, column, end: end_line });
+        if let BlockEnd::Else(s) | BlockEnd::ElseIf(s, _) = end {
+            self.error(s, s.start + 1, "`else` without `if`");
         }
         if let Some(ty) = sig.ret {
             if !always_returns(&body) {
                 let msg = format!("function `{}` must return {} value on every path (missing `return`)", sig.name, ty.with_article());
-                self.error(opener, msg);
+                self.error(opener, name_at, msg);
             }
         }
         let Signature { name, params, ret } = sig;
         Function { name, params, ret, body }
     }
 
+    /// Recognize a block terminator: `<-;`, `<- else ->`, or `<- else if ... ->`.
+    fn parse_block_end(&self, stmt: Statement) -> Option<Result<BlockEnd, Diagnostic>> {
+        if !self.starts(stmt, "<-") {
+            return None;
+        }
+        let (s, len) = (stmt.start, stmt.end - stmt.start);
+        if len == 2 && self.src.is(s + 1, ";") {
+            return Some(Ok(BlockEnd::End));
+        }
+        if self.src.is(s + 1, "else") {
+            if len == 3 && self.src.is(s + 2, "->") {
+                return Some(Ok(BlockEnd::Else(stmt)));
+            }
+            if len > 2 && self.src.is(s + 2, "if") {
+                return Some(Ok(BlockEnd::ElseIf(stmt, Statement { start: s + 3, end: stmt.end })));
+            }
+        }
+        let message = "invalid block terminator, use `<-;`, `<- else ->`, or `<- else if a < b ->`";
+        Some(Err(self.src.error(s, message)))
+    }
+
     /// Read statements until a block terminator (function body, `if`, `else`, or `while`).
-    fn parse_block(&mut self, opener: Piece<'a>, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd<'a>) {
+    fn parse_block(&mut self, opener: Statement, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd) {
         self.blocks.push(Vec::new());
         let result = self.parse_block_body(opener, what, scope);
         let line = self.last_line();
@@ -322,43 +376,46 @@ impl<'a> Parser<'a> {
         result
     }
 
-    fn parse_block_body(&mut self, opener: Piece<'a>, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd<'a>) {
+    fn parse_block_body(&mut self, opener: Statement, what: &str, scope: &mut Scope) -> (Vec<Stmt>, BlockEnd) {
         let mut body = Vec::new();
-        while let Some(piece) = self.next_piece() {
-            match parse_block_end(piece) {
+        while let Some(stmt) = self.next_stmt() {
+            match self.parse_block_end(stmt) {
                 Some(Ok(end)) => return (body, end),
                 Some(Err(e)) => {
-                    self.error(piece, e);
+                    self.fail(stmt, e);
                     return (body, BlockEnd::End);
                 }
                 None => {}
             }
-            if piece.text.starts_with("use ") {
-                self.error(piece, "`use` is only allowed at the top level of a file");
+            if self.starts(stmt, "use") {
+                self.error(stmt, stmt.start, "`use` is only allowed at the top level of a file");
                 continue;
             }
-            if piece.text.starts_with("fnc ") {
-                self.error(piece, "functions can only be defined at the top level (is a `<-;` missing above?)");
+            if self.starts(stmt, "fnc") {
+                let message = "functions can only be defined at the top level (is a `<-;` missing above?)";
+                self.error(stmt, stmt.start, message);
                 self.skip_block();
                 continue;
             }
-            body.extend(self.parse_stmt_line(piece, scope));
+            body.extend(self.parse_stmt_line(stmt, scope));
         }
-        self.error(opener, format!("{} is not closed with `<-;`", what));
+        self.errors.push(self.src.error(opener.start, format!("{} is not closed with `<-;`", what)));
         (body, BlockEnd::End)
     }
 
-    /// A condition; on error, it is reported and replaced by `true` so the block still parses.
-    fn condition(&mut self, piece: Piece<'a>, cond: &str, scope: &mut Scope) -> Expr {
-        parse_condition(cond, scope, piece.line).unwrap_or_else(|e| {
-            self.error(piece, e);
+    /// A condition (the tokens after `if` / `while` / `else if`, up to the `->`);
+    /// on error, it is reported and replaced by `true` so the block still parses.
+    fn condition(&mut self, cond: Statement, scope: &mut Scope) -> Expr {
+        let result = ExprParser::new(self.src, cond, scope).condition();
+        result.unwrap_or_else(|e| {
+            self.fail(cond, e);
             Expr::Bool(true)
         })
     }
 
     /// `if <condition> ->` together with its `else if` / `else` chain.
-    fn parse_if(&mut self, opener: Piece<'a>, cond: &str, scope: &mut Scope) -> Stmt {
-        let cond = self.condition(opener, cond, scope);
+    fn parse_if(&mut self, opener: Statement, cond: Statement, scope: &mut Scope) -> Stmt {
+        let cond = self.condition(cond, scope);
 
         // Each branch gets its own copy of the scope: variables declared inside
         // a block are not visible outside it.
@@ -368,11 +425,11 @@ impl<'a> Parser<'a> {
         let mut else_scope = scope.clone();
         let else_body = match end {
             BlockEnd::End => Vec::new(),
-            BlockEnd::ElseIf(p, cond) => vec![self.parse_if(p, cond, &mut else_scope)],
-            BlockEnd::Else(p) => {
-                let (body, end) = self.parse_block(p, "`else` block", &mut else_scope);
+            BlockEnd::ElseIf(s, cond) => vec![self.parse_if(s, cond, &mut else_scope)],
+            BlockEnd::Else(s) => {
+                let (body, end) = self.parse_block(s, "`else` block", &mut else_scope);
                 if let BlockEnd::Else(q) | BlockEnd::ElseIf(q, _) = end {
-                    self.error(q, "`else` was already used, close the block with `<-;`");
+                    self.error(q, q.start + 1, "`else` was already used, close the block with `<-;`");
                 }
                 body
             }
@@ -387,76 +444,96 @@ impl<'a> Parser<'a> {
     }
 
     /// `while <condition> ->` and its body.
-    fn parse_while(&mut self, opener: Piece<'a>, cond: &str, scope: &mut Scope) -> Stmt {
-        let cond = self.condition(opener, cond, scope);
+    fn parse_while(&mut self, opener: Statement, cond: Statement, scope: &mut Scope) -> Stmt {
+        let cond = self.condition(cond, scope);
         let mut body_scope = scope.clone();
         let (body, end) = self.parse_block(opener, "`while` loop", &mut body_scope);
-        if let BlockEnd::Else(p) | BlockEnd::ElseIf(p, _) = end {
-            self.error(p, "`else` without `if`");
+        if let BlockEnd::Else(s) | BlockEnd::ElseIf(s, _) = end {
+            self.error(s, s.start + 1, "`else` without `if`");
         }
         // The body may run again: it must not leave outside variables moved.
         if !always_returns(&body) {
-            if let Err((line, e)) = scope.check_loop(&body_scope) {
-                self.error_on_line(line, opener, e);
+            if let Err((line, name, e)) = scope.check_loop(&body_scope) {
+                self.error_on_line(line, &name, opener, e);
             }
         }
         Stmt::While { cond, body }
     }
 
     /// `return;` or `return value;` inside a function.
-    fn parse_return(&self, line: usize, value: &str, scope: &mut Scope) -> Result<Stmt, String> {
+    fn parse_return(&self, stmt: Statement, scope: &mut Scope) -> Result<Stmt, Diagnostic> {
+        let src = self.src;
         let Some(sig) = &self.current else {
-            return Err("`return` can only be used inside a function".into());
+            return Err(src.error(stmt.start, "`return` can only be used inside a function"));
         };
-        match (value.trim(), sig.ret) {
-            ("", None) => Ok(Stmt::Return(None)),
-            ("", Some(ty)) => Err(format!("function `{}` must return {} value", sig.name, ty.with_article())),
-            (_, None) => Err(format!("function `{}` has no return type, so use `return;` without a value", sig.name)),
-            (value, Some(ty)) => {
-                let expr = parse_typed(value, scope, line, Access::Move, ty)?;
-                check_assign(ty, &expr, &format!("return value of `{}`", sig.name))?;
+        let mut p = ExprParser::new(src, stmt, scope);
+        p.pos += 1; // `return`
+        match (p.is(";"), sig.ret) {
+            (true, None) => {
+                p.finish()?;
+                Ok(Stmt::Return(None))
+            }
+            (true, Some(ty)) => {
+                Err(src.error(stmt.start, format!("function `{}` must return {} value", sig.name, ty.with_article())))
+            }
+            (false, None) => Err(src.error(
+                stmt.start,
+                format!("function `{}` has no return type, so use `return;` without a value", sig.name),
+            )),
+            (false, Some(ty)) => {
+                let at = p.pos;
+                let expr = p.value(Access::Move, Some(ty))?;
+                p.finish()?;
+                check_assign(ty, &expr, &format!("return value of `{}`", sig.name)).map_err(|e| src.error(at, e))?;
                 Ok(Stmt::Return(Some(expr)))
             }
         }
     }
 
     /// One statement. Errors are recorded and the statement is skipped.
-    fn parse_stmt_line(&mut self, piece: Piece<'a>, scope: &mut Scope) -> Option<Stmt> {
-        let text = piece.text;
-        if let Some(cond) = text.strip_prefix("if ") {
-            return Some(self.parse_if(piece, cond, scope));
+    fn parse_stmt_line(&mut self, stmt: Statement, scope: &mut Scope) -> Option<Stmt> {
+        let after_keyword = Statement { start: stmt.start + 1, end: stmt.end };
+        if self.starts(stmt, "if") {
+            return Some(self.parse_if(stmt, after_keyword, scope));
         }
-        if let Some(cond) = text.strip_prefix("while ") {
-            return Some(self.parse_while(piece, cond, scope));
+        if self.starts(stmt, "while") {
+            return Some(self.parse_while(stmt, after_keyword, scope));
         }
-        let result = match text.strip_prefix("return").and_then(|s| s.strip_suffix(';')) {
-            Some(value) if value.is_empty() || value.starts_with(' ') => {
-                self.parse_return(piece.line, value, scope).map(Some)
-            }
-            _ => parse_stmt(text, scope, piece.line),
+        let is_return = self.starts(stmt, "return");
+        let result = if let Some(e) = incomplete(self.src, stmt) {
+            Err(e)
+        } else if is_return {
+            self.parse_return(stmt, scope)
+        } else {
+            parse_stmt(self.src, stmt, scope)
         };
-        if let Ok(Some(Stmt::Set { name, ty, keep, borrow, .. })) = &result {
-            let kind = match (keep, borrow, scope.kind_of(name)) {
-                (true, _, _) => "keep",
-                (_, true, _) => "borrow",
-                (_, _, Some(Kind::Reuse)) => "reuse",
-                _ => "owned",
-            };
-            if kind == "reuse" {
-                self.warn_useless_reuse(piece, *ty);
+        match result {
+            Ok(s) => {
+                if let Stmt::Set { name, ty, keep, borrow, .. } = &s {
+                    let kind = match (keep, borrow, scope.kind_of(name)) {
+                        (true, _, _) => "keep",
+                        (_, true, _) => "borrow",
+                        (_, _, Some(Kind::Reuse)) => "reuse",
+                        _ => "owned",
+                    };
+                    let at = declared_name(self.src, stmt);
+                    if kind == "reuse" {
+                        self.warn_useless_reuse(at, *ty);
+                    }
+                    self.declare_symbol(at, name, *ty, kind);
+                }
+                Some(s)
             }
-            self.declare_symbol(piece, name, *ty, kind);
+            Err(e) => {
+                self.fail(stmt, e);
+                // A broken `return` still ends its path (no extra "missing `return`" error).
+                if is_return {
+                    return Some(Stmt::Return(None));
+                }
+                // Keep a failed `set`'s variable known, so later lines don't report it as undeclared.
+                declare_after_error(self.src, stmt, scope);
+                None
+            }
         }
-        let is_return = text.starts_with("return") && text.ends_with(';');
-        result.unwrap_or_else(|e| {
-            self.error(piece, e);
-            // A broken `return` still ends its path (no extra "missing `return`" error).
-            if is_return {
-                return Some(Stmt::Return(None));
-            }
-            // Keep a failed `set`'s variable known, so later lines don't report it as undeclared.
-            declare_after_error(text, scope);
-            None
-        })
     }
 }

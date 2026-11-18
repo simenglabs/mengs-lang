@@ -200,19 +200,21 @@ impl Scope {
 
     /// After a loop body: a variable from outside that the body leaves moved
     /// (or a borrow it leaves stale) would be broken on the next iteration.
-    /// Returns the offending line and message.
-    pub fn check_loop(&self, body: &Scope) -> Result<(), (usize, String)> {
+    /// Returns the offending line, the name to point at there (the moved variable,
+    /// or the owner that got a new value), and the message.
+    pub fn check_loop(&self, body: &Scope) -> Result<(), (usize, String, String)> {
         for (name, var) in &self.vars {
             let Some(after) = body.vars.get(name) else { continue };
             if let (None, Some(line)) = (var.moved_at, after.moved_at) {
-                return Err((line, format!(
+                return Err((line, name.clone(), format!(
                     "variable `{}` is moved inside a loop, so the next iteration could not use it; \
                      declare it with `reuse`, borrow it, copy it, or give it a new value before the loop repeats",
                     name
                 )));
             }
             if let (None, Some(line)) = (var.stale_at, after.stale_at) {
-                return Err((line, format!(
+                let owner = var.borrows.clone().unwrap_or_else(|| name.clone());
+                return Err((line, owner, format!(
                     "`{}` borrows a variable that gets a new value inside a loop, so the next iteration could not use it",
                     name
                 )));

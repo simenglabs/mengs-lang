@@ -13,7 +13,8 @@ use crate::ast::Program;
 use crate::deps;
 
 use super::comments::strip_comments;
-use super::diagnostic::{Diagnostic, Severity, diagnostic, split_pieces};
+use super::diagnostic::{Diagnostic, Severity, Source};
+use super::lexer::Token;
 use super::symbols::{FunctionSymbol, Symbols};
 use super::{Imported, analyze};
 
@@ -26,18 +27,22 @@ pub struct SourceError {
     pub diagnostic: Diagnostic,
 }
 
-/// `use "path.meng";` -> `path.meng` (a file), `use "name";` -> `name` (a package).
-pub fn parse_use(text: &str) -> Result<String, String> {
+/// The tokens of `use "path.meng";` -> `path.meng` (a file), of `use "name";` -> `name` (a package).
+pub fn parse_use(tokens: &[Token]) -> Result<String, String> {
     let usage = "invalid use, example: use \"math.meng\"; or use \"package\";";
-    let path = text.strip_prefix("use ").and_then(|s| s.strip_suffix(';')).ok_or(usage)?.trim();
-    let path = path.strip_prefix('"').and_then(|s| s.strip_suffix('"')).ok_or(usage)?;
+    let [Token::Ident(word), Token::Str(path), Token::Sym(";")] = tokens else {
+        return Err(usage.into());
+    };
+    if word != "use" {
+        return Err(usage.into());
+    }
     if path.contains('"') || !(path.ends_with(".meng") || deps::is_package_name(path)) {
         return Err(format!(
             "`{}` is neither a .meng file nor a package name, example: use \"math.meng\"; or use \"package\";",
             path
         ));
     }
-    Ok(path.to_string())
+    Ok(path.clone())
 }
 
 /// Where an import points: a file relative to `dir`, or an installed package.
@@ -149,11 +154,18 @@ impl Loader {
             return (imported, symbols, true); // reported by `analyze`
         };
         let mut seen = HashSet::new();
-        for piece in split_pieces(&stripped) {
-            let Ok(path) = piece.text.strip_prefix("use ").map(|_| parse_use(piece.text)).transpose() else { continue };
-            let Some(path) = path else { continue };
+        // Lexing errors and invalid `use` statements are reported by `analyze`.
+        let (src, _) = Source::new(&stripped);
+        for stmt in src.statements() {
+            if !src.is(stmt.start, "use") {
+                continue;
+            }
+            let tokens: Vec<Token> = src.tokens[stmt.start..stmt.end].iter().map(|t| t.token.clone()).collect();
+            let Ok(path) = parse_use(&tokens) else { continue };
+            // Errors point at the path.
+            let at = stmt.start + 1;
             let fail = |loader: &mut Loader, message: String| {
-                loader.errors.push(SourceError { file: name.into(), code: code.into(), diagnostic: diagnostic(piece, message) });
+                loader.errors.push(SourceError { file: name.into(), code: code.into(), diagnostic: src.error(at, message) });
             };
 
             let (full, display) = match resolve(dir, &path) {
@@ -339,8 +351,14 @@ mod tests {
 
     #[test]
     fn use_syntax() {
-        assert_eq!(parse_use("use \"a/b.meng\";"), Ok("a/b.meng".to_string()));
-        assert!(parse_use("use a.meng;").is_err());
-        assert!(parse_use("use \"a.txt\";").is_err());
+        let parse = |code: &str| {
+            let tokens = crate::parser::lexer::tokenize_source(code).unwrap();
+            parse_use(&tokens.into_iter().map(|t| t.token).collect::<Vec<_>>())
+        };
+        assert_eq!(parse("use \"a/b.meng\";"), Ok("a/b.meng".to_string()));
+        assert_eq!(parse("use\n  \"pkg\"\n;"), Ok("pkg".to_string()));
+        assert!(parse("use math;").is_err(), "the path must be quoted");
+        assert!(parse("use \"a.meng\"").is_err());
+        assert!(parse("use \"a.txt\";").is_err());
     }
 }

@@ -15,6 +15,34 @@ show("Hello");
 show("one"); show("two");
 ```
 
+## Long statements
+
+A statement can span several lines: it ends at its `;` (or, for a block, at its `->`),
+not at the end of the line. Break a long expression, a function header, or the
+arguments of a call wherever it reads best.
+
+```meng
+fnc Describe(
+    name: str,
+    age: int,
+    city: str = "Phnom Penh"
+): str ->
+    return name + " is " + str(age)
+        + " and lives in " + city;
+<-;
+
+set price: int = 4;
+set total: int = price * 3
+    + 2;
+show(Describe(
+    "Dara",
+    total
+));
+```
+
+If a line ends with a value and the next line starts a new statement, the `;` is
+missing; the error points at the end of that line.
+
 ## Comments
 
 A comment starts and ends with a percent sign. It may span several lines. A percent

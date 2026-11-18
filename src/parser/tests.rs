@@ -821,7 +821,8 @@ fn every_error_is_reported_with_its_column() {
     let errors = parse(src).unwrap_err();
     let found: Vec<(usize, usize)> = errors.iter().map(|e| (e.line, e.column)).collect();
     // Line 2 has no error: `age` stays declared after its failed `set`.
-    assert_eq!(found, vec![(1, 5), (3, 6), (4, 24), (5, 1)], "{errors:?}");
+    // Line 5: the missing `;` is reported where it belongs, right after `show(1)`.
+    assert_eq!(found, vec![(1, 5), (3, 6), (4, 24), (5, 8)], "{errors:?}");
 }
 
 #[test]
@@ -892,4 +893,49 @@ fn reuse_on_a_scalar_warns() {
     assert!(parse(src).is_ok());
     assert_eq!(warnings("fnc F(reuse n: int)->\n<-;"), vec!["Line 1: `reuse` has no effect on int values (they are always copied)"]);
     assert!(warnings("set reuse s: str = \"x\";\nfnc F(reuse a: [int])->\n<-;").is_empty());
+}
+
+// ------------------------------------------------------------- statements from tokens
+
+#[test]
+fn statements_can_span_lines() {
+    ok("set price: int = 2;\nset total: int = price\n    * 3\n    + 1;\nfnc Greet(\n    name: str,\n    greeting: str = \"Hi\"\n)->\n    show(greeting + name);\n<-;\nGreet(\n    \"Meng\"\n);\nif total > 1\n   and price > 0 ->\n    show(total);\n<-;");
+}
+
+#[test]
+fn multi_line_statement_with_tricky_string() {
+    let program = parse("show(\n    \"a; b -> c % d\"\n);").unwrap();
+    assert!(matches!(&program.main[..], [Stmt::Print(Expr::Str(s))] if s == "a; b -> c % d"), "{:?}", program.main);
+}
+
+#[test]
+fn missing_semicolon_points_at_its_line() {
+    err("show(1)\nshow(2);", 1, "missing `;`");
+    err("show(1)", 1, "missing `;`");
+}
+
+#[test]
+fn columns_are_exact() {
+    let errors = parse("set a: int = 1;\nshow(a + b);\nshow(1 + \"x\");\nset s: str = 5;").unwrap_err();
+    let found: Vec<(usize, usize)> = errors.iter().map(|e| (e.line, e.column)).collect();
+    assert_eq!(found, vec![(2, 10), (3, 8), (4, 5)], "{errors:?}");
+}
+
+#[test]
+fn a_lexing_error_only_breaks_its_own_line() {
+    let errors = parse("show(\"abc);\nset x: int = 1;\nshow(x);\nshow(nope);").unwrap_err();
+    let found: Vec<(usize, usize)> = errors.iter().map(|e| (e.line, e.column)).collect();
+    assert_eq!(found, vec![(1, 6), (4, 6)], "{errors:?}");
+}
+
+#[test]
+fn unclosed_multi_line_header() {
+    err("fnc F(\n  a: int\n->\n<-;", 3, "invalid function syntax");
+}
+
+#[test]
+fn loop_errors_point_at_the_variable() {
+    let src = "fnc G(s: str)->\n<-;\nset a: str = \"x\";\nwhile true ->\n    G(a);\n<-;";
+    let errors = parse(src).unwrap_err();
+    assert_eq!((errors[0].line, errors[0].column), (5, 7), "{errors:?}");
 }
