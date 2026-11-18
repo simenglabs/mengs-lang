@@ -116,7 +116,7 @@ impl Scope {
         }
 
         let ty = var.ty;
-        if access == Access::Move && var.kind == Kind::Owned && var.borrows.is_none() {
+        if access == Access::Move && ty.is_heap() && var.kind == Kind::Owned && var.borrows.is_none() {
             self.vars.get_mut(name).unwrap().moved_at = Some(line);
             self.events.borrow_mut().push(OwnershipEvent { name: name.to_string(), line, moved: true });
         }
@@ -168,10 +168,10 @@ impl Scope {
         self.vars.get(name).map(|v| v.ty)
     }
 
-    /// Whether moving this variable really takes its value (an owned variable,
-    /// not `keep`/`reuse`/a borrow, which are copied instead).
+    /// Whether moving this variable really takes its value (an owned `str` or
+    /// array, not a scalar, `keep`/`reuse` or a borrow, which are copied instead).
     pub fn is_owned(&self, name: &str) -> bool {
-        self.vars.get(name).is_some_and(|v| v.kind == Kind::Owned && v.borrows.is_none())
+        self.vars.get(name).is_some_and(|v| v.ty.is_heap() && v.kind == Kind::Owned && v.borrows.is_none())
     }
 
     fn get(&self, name: &str) -> Result<&VarInfo, String> {

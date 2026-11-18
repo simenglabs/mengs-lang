@@ -1,8 +1,8 @@
 //! Parser tests: ownership, types, calls, and syntax errors.
 //! Each error test checks the line number and a fragment of the message.
 
-use super::parse;
-use crate::ast::Stmt;
+use super::{parse, warnings};
+use crate::ast::{Expr, Stmt};
 
 /// The source must parse without errors.
 fn ok(src: &str) {
@@ -43,12 +43,12 @@ fn show_and_if_only_read() {
 
 #[test]
 fn moved_variable_cannot_be_read_either() {
-    err("set a: int = 1;\nset b: int = a;\nif a = 1 ->\n<-;", 3, "was moved");
+    err("set a: str = \"x\";\nset b: str = a;\nif a = \"x\" ->\n<-;", 3, "was moved");
 }
 
 #[test]
-fn ints_move_like_strings() {
-    err("set a: int = 1;\nset b: int = a;\nset c: int = a;", 3, "was moved");
+fn strings_move() {
+    err("set a: str = \"x\";\nset b: str = a;\nset c: str = a;", 3, "was moved");
 }
 
 #[test]
@@ -495,13 +495,13 @@ fn variables_inside_expressions_are_only_read() {
 
 #[test]
 fn a_bare_variable_still_moves() {
-    err("set a: int = 1;\nset b: int = a + 1;\nset c: int = a;\nshow(a);", 4, "variable `a` was moved on line 3");
-    err("set a: int = 1;\nset b: int = (a);\nshow(a);", 3, "variable `a` was moved on line 2");
+    err("set a: str = \"x\";\nset b: str = a + \"y\";\nset c: str = a;\nshow(a);", 4, "variable `a` was moved on line 3");
+    err("set a: str = \"x\";\nset b: str = (a);\nshow(a);", 3, "variable `a` was moved on line 2");
 }
 
 #[test]
 fn moved_variable_cannot_be_used_in_an_expression() {
-    err("set a: int = 1;\nset b: int = a;\nshow(a + 1);", 3, "variable `a` was moved on line 2");
+    err("set a: str = \"x\";\nset b: str = a;\nshow(a + \"y\");", 3, "variable `a` was moved on line 2");
 }
 
 #[test]
@@ -834,4 +834,26 @@ fn symbols_json_is_well_formed() {
     assert!(json.starts_with("{\"functions\":[{\"name\":\"F\""), "{json}");
     assert!(json.contains(r#""signature":"fnc F(s: str = \"a\\\"b\")""#), "{json}");
     assert!(json.contains(r#"{"name":"t","type":"[int]","kind":"owned","line":3,"column":5,"end":3,"function":null}"#), "{json}");
+}
+
+// ------------------------------------------------------------- scalars are copied
+
+#[test]
+fn ints_are_copied() {
+    ok("set a: int = 1;\nset b: int = a;\nshow(a);\nfnc F(n: int)->\n<-;\nF(a);\nF(a);\nset f: float = 1.5;\nset g: float = f;\nshow(f);\nset t: bool = true;\nset u: bool = t;\nshow(t);");
+}
+
+#[test]
+fn scalar_moves_are_not_marked() {
+    let program = parse("set a: int = 1;\nset b: int = a;").unwrap();
+    assert!(matches!(&program.main[1], Stmt::Set { value: Expr::Var { moved: false, .. }, .. }));
+}
+
+#[test]
+fn reuse_on_a_scalar_warns() {
+    let src = "set reuse i: int = 0;\nshow(i);";
+    assert_eq!(warnings(src), vec!["Line 1: `reuse` has no effect on int values (they are always copied)"]);
+    assert!(parse(src).is_ok());
+    assert_eq!(warnings("fnc F(reuse n: int)->\n<-;"), vec!["Line 1: `reuse` has no effect on int values (they are always copied)"]);
+    assert!(warnings("set reuse s: str = \"x\";\nfnc F(reuse a: [int])->\n<-;").is_empty());
 }

@@ -193,16 +193,20 @@ function checkDocument(document, collection) {
 
   child.on('close', () => {
     const diagnostics = [];
-    // `[ERROR] -:line:column: message` for this document (errors inside imported
+    // `[ERROR]` or `[WARN] -:line:column: message` for this document (errors inside imported
     // files are named after those files; their `use` line gets its own error).
-    for (const m of stderr.matchAll(/^\[ERROR\] -:(\d+):(\d+): (.*)$/gm)) {
-      const line = Math.min(Number(m[1]) - 1, document.lineCount - 1);
+    for (const m of stderr.matchAll(/^\[(ERROR|WARN)\] -:(\d+):(\d+): (.*)$/gm)) {
+      const line = Math.min(Number(m[2]) - 1, document.lineCount - 1);
       const text = document.lineAt(line).text;
-      const column = Math.min(Number(m[2]) - 1, text.length);
+      const column = Math.min(Number(m[3]) - 1, text.length);
       // Underline the word at the column (or the rest of the line).
       const word = document.getWordRangeAtPosition(new vscode.Position(line, column), /[A-Za-z_][A-Za-z0-9_]*|\S+/);
       const range = word || new vscode.Range(line, column, line, text.length);
-      const diagnostic = new vscode.Diagnostic(range, m[3], vscode.DiagnosticSeverity.Error);
+      const diagnostic = new vscode.Diagnostic(
+        range,
+        m[4],
+        m[1] === 'WARN' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error,
+      );
       diagnostic.source = 'meng';
       diagnostics.push(diagnostic);
     }

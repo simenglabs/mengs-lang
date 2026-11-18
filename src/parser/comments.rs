@@ -51,7 +51,7 @@ pub fn strip_comments(code: &str) -> Result<String, Diagnostic> {
 
     if in_comment {
         let (line, column) = comment_start;
-        return Err(Diagnostic { line, column, message: "comment is not closed with `%`".into() });
+        return Err(Diagnostic { line, column, message: "comment is not closed with `%`".into(), severity: super::diagnostic::Severity::Error });
     }
     Ok(out)
 }

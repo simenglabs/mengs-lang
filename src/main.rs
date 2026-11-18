@@ -52,15 +52,16 @@ fn run_deps(args: &[String]) -> ! {
     }
 }
 
-/// Print an error as `[ERROR] file:line:column: message`, followed by the
-/// source line and a caret under the column.
+/// Print an error as `[ERROR] file:line:column: message` (`[WARN]` for a
+/// warning), followed by the source line and a caret under the column.
 fn report(error: &parser::SourceError) {
     let (filename, e) = (&error.file, &error.diagnostic);
     let line = error.code.lines().nth(e.line - 1).unwrap_or("");
     // Diagnostics count bytes; show characters (and keep tabs so the caret lines up).
     let prefix: String = line.get(..e.column.saturating_sub(1)).unwrap_or(line).chars().collect();
     let column = prefix.chars().count() + 1;
-    eprintln!("[ERROR] {}:{}:{}: {}", filename, e.line, column, e.message);
+    let label = if e.severity == parser::Severity::Warning { "WARN" } else { "ERROR" };
+    eprintln!("[{}] {}:{}:{}: {}", label, filename, e.line, column, e.message);
     let pad: String = prefix.chars().map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
     let number = e.line.to_string();
     eprintln!("  {} | {}", number, line);
@@ -124,15 +125,19 @@ fn main() {
     }
 
     // Pipeline: source (+ imports) -> AST -> (interpreter | C -> binary)
-    let ast = parser::parse_file(filename, &code, &dir).unwrap_or_else(|errors| {
-        for e in &errors {
+    let (ast, warnings) = parser::parse_file(filename, &code, &dir).unwrap_or_else(|diagnostics| {
+        for e in &diagnostics {
             report(e);
         }
-        if errors.len() > 1 {
-            eprintln!("[FAILED] {} errors in '{}'", errors.len(), filename);
+        let count = diagnostics.iter().filter(|e| e.diagnostic.severity == parser::Severity::Error).count();
+        if count > 1 {
+            eprintln!("[FAILED] {} errors in '{}'", count, filename);
         }
         process::exit(1);
     });
+    for w in &warnings {
+        report(w);
+    }
 
     match mode {
         Mode::Check => println!("[OK] No errors in '{}'", filename),

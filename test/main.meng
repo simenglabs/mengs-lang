@@ -198,7 +198,7 @@ show(trail + "end");
 % rules as strings and are freed automatically.                         %
 fnc Total(keep items: [int]): int ->
     set sum: int = 0;
-    set reuse i: int = 0;
+    set i: int = 0;
     while i < len(items) ->
         sum = sum + items[i];
         i = i + 1;

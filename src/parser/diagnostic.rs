@@ -2,13 +2,21 @@
 
 use std::fmt;
 
-/// A parse error. `Display` gives `Line N: message` (the column is shown separately).
+/// Whether a diagnostic stops compilation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+/// A parse error or warning. `Display` gives `Line N: message` (the column is shown separately).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     pub line: usize,
     /// 1-based column.
     pub column: usize,
     pub message: String,
+    pub severity: Severity,
 }
 
 impl fmt::Display for Diagnostic {
@@ -71,7 +79,7 @@ pub fn split_pieces(code: &str) -> Vec<Piece<'_>> {
 /// "variable `a` was moved"), otherwise at the start of the statement.
 pub fn diagnostic(piece: Piece, message: String) -> Diagnostic {
     let offset = quoted_fragments(&message).find_map(|frag| find_word(piece.text, frag)).unwrap_or(0);
-    Diagnostic { line: piece.line, column: piece.column + offset, message }
+    Diagnostic { line: piece.line, column: piece.column + offset, message, severity: Severity::Error }
 }
 
 fn quoted_fragments(message: &str) -> impl Iterator<Item = &str> {

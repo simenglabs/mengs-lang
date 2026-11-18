@@ -13,7 +13,7 @@ use crate::ast::Program;
 use crate::deps;
 
 use super::comments::strip_comments;
-use super::diagnostic::{Diagnostic, diagnostic, split_pieces};
+use super::diagnostic::{Diagnostic, Severity, diagnostic, split_pieces};
 use super::symbols::{FunctionSymbol, Symbols};
 use super::{Imported, analyze};
 
@@ -61,7 +61,9 @@ fn resolve(dir: &Path, path: &str) -> Result<(PathBuf, String), String> {
 
 /// Parse a program file and everything it imports. `name` is how the file is
 /// shown in errors (`-` for standard input); imports resolve from `dir`.
-pub fn parse_file(name: &str, code: &str, dir: &Path) -> Result<Program, Vec<SourceError>> {
+/// `Ok` carries the warnings; `Err` carries the errors and warnings (in file
+/// order, then by line and column).
+pub fn parse_file(name: &str, code: &str, dir: &Path) -> Result<(Program, Vec<SourceError>), Vec<SourceError>> {
     let mut loader = Loader::default();
     let root = loader.load(name, code, dir, false);
     let mut program = Program::default();
@@ -69,10 +71,10 @@ pub fn parse_file(name: &str, code: &str, dir: &Path) -> Result<Program, Vec<Sou
         program.functions.append(&mut module.functions);
     }
     match root {
-        Some(mut root) if loader.errors.is_empty() => {
+        Some(mut root) if !loader.has_errors() => {
             program.functions.append(&mut root.functions);
             program.main = root.main;
-            Ok(program)
+            Ok((program, loader.errors))
         }
         _ => Err(loader.errors),
     }
@@ -95,27 +97,45 @@ struct Loader {
     loading: Vec<PathBuf>,
     /// Imported files in load order (dependencies first).
     done: Vec<Program>,
+    /// Errors and warnings of all files, in load order.
     errors: Vec<SourceError>,
     root_symbols: Option<Symbols>,
 }
 
 impl Loader {
+    fn has_errors(&self) -> bool {
+        self.error_count() > 0
+    }
+
+    fn error_count(&self) -> usize {
+        self.errors.iter().filter(|e| e.diagnostic.severity == Severity::Error).count()
+    }
+
+    /// Record the diagnostics of one file: errors and warnings, sorted by position.
+    fn record(&mut self, file: &str, code: &str, errors: Vec<Diagnostic>, warnings: Vec<Diagnostic>) {
+        let mut all: Vec<Diagnostic> = errors.into_iter().chain(warnings).collect();
+        all.sort_by_key(|d| (d.line, d.column));
+        for diagnostic in all {
+            self.errors.push(SourceError { file: file.into(), code: code.into(), diagnostic });
+        }
+    }
+
     /// Load one file. Returns its parsed program when it has no errors.
     fn load(&mut self, name: &str, code: &str, dir: &Path, library: bool) -> Option<Program> {
         let (imported, imported_symbols, ok) = self.load_imports(name, code, dir);
-        let (result, mut symbols) = analyze(code, &imported, library);
+        let (result, warnings, mut symbols) = analyze(code, &imported, library);
 
         if !library {
             symbols.functions.extend(imported_symbols);
             self.root_symbols = Some(symbols);
         }
         match result {
-            Ok(program) if ok => Some(program),
-            Ok(_) => None,
+            Ok(program) => {
+                self.record(name, code, Vec::new(), warnings);
+                ok.then_some(program)
+            }
             Err(errors) => {
-                for diagnostic in errors {
-                    self.errors.push(SourceError { file: name.into(), code: code.into(), diagnostic });
-                }
+                self.record(name, code, errors, warnings);
                 None
             }
         }
@@ -165,7 +185,7 @@ impl Loader {
                     ok = false;
                     continue;
                 };
-                let errors_before = self.errors.len();
+                let errors_before = self.error_count();
                 self.loading.push(canonical.clone());
                 // Resolve its own imports from its folder, keeping paths relative for display.
                 let sub_dir = Path::new(&display).parent().map_or_else(|| dir.to_path_buf(), Path::to_path_buf);
@@ -173,7 +193,7 @@ impl Loader {
                 self.loading.pop();
                 match program {
                     Some(program) => self.done.push(program),
-                    None if self.errors.len() > errors_before => {
+                    None if self.error_count() > errors_before => {
                         fail(self, format!("`{}` has errors (see above)", path));
                         ok = false;
                     }
@@ -205,7 +225,7 @@ impl Loader {
     /// Load an imported file and record what it exports.
     fn load_library(&mut self, display: &str, code: &str, dir: &Path, canonical: &Path) -> Option<Program> {
         let (mut exports, mut export_symbols, imports_ok) = self.load_imports(display, code, dir);
-        let (result, symbols) = analyze(code, &exports, true);
+        let (result, warnings, symbols) = analyze(code, &exports, true);
         for f in symbols.functions {
             exports.insert(f.sig.name.clone(), (f.sig.clone(), display.to_string()));
             export_symbols.push(FunctionSymbol { file: Some(display.to_string()), ..f });
@@ -213,12 +233,12 @@ impl Loader {
         self.exports.insert(canonical.to_path_buf(), exports);
         self.export_symbols.insert(canonical.to_path_buf(), export_symbols);
         match result {
-            Ok(program) if imports_ok => Some(program),
-            Ok(_) => None,
+            Ok(program) => {
+                self.record(display, code, Vec::new(), warnings);
+                imports_ok.then_some(program)
+            }
             Err(errors) => {
-                for diagnostic in errors {
-                    self.errors.push(SourceError { file: display.into(), code: code.into(), diagnostic });
-                }
+                self.record(display, code, errors, warnings);
                 None
             }
         }
@@ -272,7 +292,7 @@ mod tests {
         ]);
         let code = fs::read_to_string(dir.join("main.meng")).unwrap();
         let code = format!("{code}\nfnc Own()->\n<-;");
-        let program = parse_file("main.meng", &code, &dir).unwrap();
+        let (program, _) = parse_file("main.meng", &code, &dir).unwrap();
         let names: Vec<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["Label", "Square", "Own"], "dependencies first, then the file's own functions");
         assert_eq!(program.main.len(), 2);

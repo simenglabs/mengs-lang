@@ -51,7 +51,7 @@ show(scores);
 `set` can be followed by `keep` or `reuse`:
 
 - `set keep x: int = 1;` is a constant: it cannot be reassigned.
-- `set reuse x: str = "a";` can be moved many times (it is copied when moved).
+- `set reuse x: str = "a";` can be moved many times (it is copied when moved). Only `str` and arrays are ever moved; `int`, `float`, and `bool` are always copied.
 
 What these mean exactly is explained in the [ownership guide](ownership.md).
 

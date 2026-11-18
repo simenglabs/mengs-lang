@@ -2,13 +2,13 @@
 
 Meng has no garbage collector. Every value has one owner, and the compiler checks at
 compile time that a value is not used after it was handed to someone else. This guide
-describes the rules implemented today. The accepted direction for v1 (scalars copied,
-`keep` parameters borrowing) is in [design/v1-decisions.md](../design/v1-decisions.md),
-section D3; this guide changes when those rules land.
+describes the rules implemented today. The accepted direction for v1 (`keep` parameters
+borrowing, and more) is in [design/v1-decisions.md](../design/v1-decisions.md), section
+D3; this guide changes when those rules land.
 
 ## Moves
 
-A variable is **moved** when it is used as a bare name in one of these places:
+A `str` or array variable is **moved** when it is used as a bare name in one of these places:
 
 - assigned to another variable: `set y: str = x;`
 - passed to a function: `Greet(x);`
@@ -40,7 +40,26 @@ show(a);
 [ERROR] file.meng:3:6: variable `a` was moved on line 2 and can no longer be used; declare it with `reuse`, borrow it with `<==`, or copy it with `a ()=> new_name;`
 ```
 
-Today this applies to every type, including `int`, `float`, and `bool`.
+## Scalars are copied
+
+Only `str` and arrays are moved. The scalar types `int`, `float`, and `bool` are
+always copied, so a scalar variable stays usable after `set b: int = a;`, after being
+passed to a function, and inside loops.
+
+```meng
+fnc Double(n: int): int ->
+    return n * 2;
+<-;
+
+set a: int = 21;
+set b: int = a;
+show(Double(a));
+show(a + b);
+```
+
+`reuse` has no effect on a scalar (it is copied anyway), so the compiler prints a
+warning: ``Line 1: `reuse` has no effect on int values (they are always copied)``. A
+warning does not stop compilation; drop the `reuse` to silence it.
 
 ## Reading never moves
 
@@ -76,7 +95,7 @@ show(taken);
   would be moved, it is copied instead, so it stays usable.
 - `set reuse x: T = ...;` can be moved any number of times: each move copies the value.
   For strings and arrays this is a full copy (cost proportional to the size), so use
-  `reuse` for small values and convenience.
+  `reuse` for small values and convenience. On a scalar it only produces a warning.
 - On parameters, `keep` and `reuse` describe the parameter inside the function (a `keep`
   parameter cannot be reassigned; a `reuse` parameter can be moved many times there).
   The caller's variable is still moved by the call unless it is `keep` or `reuse` itself.

@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::{Expr, Function, Program, Signature, Stmt, always_returns};
-pub use diagnostic::Diagnostic;
+pub use diagnostic::{Diagnostic, Severity};
 use diagnostic::{Piece, diagnostic, split_pieces};
 use expr::{BUILTINS, parse_condition, parse_typed};
 use scope::{Access, Kind, Scope};
@@ -49,18 +49,25 @@ pub fn parse(code: &str) -> Result<Program, Vec<Diagnostic>> {
     analyze(code, &Imported::new(), false).0
 }
 
+/// Display strings of the warnings of a single source, for tests.
+#[cfg(test)]
+pub fn warnings(code: &str) -> Vec<String> {
+    analyze(code, &Imported::new(), false).1.iter().map(|w| w.to_string()).collect()
+}
+
 /// Symbols of a single source, for tests.
 #[cfg(test)]
 pub fn symbols(code: &str) -> Symbols {
-    analyze(code, &Imported::new(), false).1
+    analyze(code, &Imported::new(), false).2
 }
 
 /// Parse one file, given the functions it imports. A `library` (an imported
-/// file) may only contain functions and `use`.
-fn analyze(code: &str, imported: &Imported, library: bool) -> (Result<Program, Vec<Diagnostic>>, Symbols) {
+/// file) may only contain functions and `use`. Returns the program (or the
+/// errors), the warnings, and the symbols.
+fn analyze(code: &str, imported: &Imported, library: bool) -> (Result<Program, Vec<Diagnostic>>, Vec<Diagnostic>, Symbols) {
     let code = match strip_comments(code) {
         Ok(code) => code,
-        Err(e) => return (Err(vec![e]), Symbols::default()),
+        Err(e) => return (Err(vec![e]), Vec::new(), Symbols::default()),
     };
     let pieces = split_pieces(&code);
     let last_line = code.lines().count().max(1);
@@ -85,13 +92,14 @@ fn analyze(code: &str, imported: &Imported, library: bool) -> (Result<Program, V
     let mut symbols = parser.symbols;
     symbols.events = parser.events.take();
 
-    let mut errors = parser.errors;
+    let mut all = parser.errors;
+    all.sort_by_key(|e| (e.line, e.column));
+    all.dedup();
+    let (errors, warnings): (Vec<_>, Vec<_>) = all.into_iter().partition(|d| d.severity == Severity::Error);
     if errors.is_empty() {
-        return (Ok(program), symbols);
+        return (Ok(program), warnings, symbols);
     }
-    errors.sort_by_key(|e| (e.line, e.column));
-    errors.dedup();
-    (Err(errors), symbols)
+    (Err(errors), warnings, symbols)
 }
 
 /// First pass: read every function header, so calls (and their return types)
@@ -181,6 +189,19 @@ impl<'a> Parser<'a> {
         self.errors.push(diagnostic(piece, message.into()));
     }
 
+    fn warn(&mut self, piece: Piece, message: impl Into<String>) {
+        let mut d = diagnostic(piece, message.into());
+        d.severity = Severity::Warning;
+        self.errors.push(d);
+    }
+
+    /// `reuse` on a value that is always copied has no effect.
+    fn warn_useless_reuse(&mut self, piece: Piece, ty: crate::ast::Type) {
+        if !ty.is_heap() {
+            self.warn(piece, format!("`reuse` has no effect on {} values (they are always copied)", ty.name()));
+        }
+    }
+
     /// An error on a given line (e.g. where a variable was moved inside a loop).
     fn error_on_line(&mut self, line: usize, fallback: Piece, message: String) {
         let piece = self.pieces.iter().find(|p| p.line == line).copied().unwrap_or(fallback);
@@ -266,6 +287,9 @@ impl<'a> Parser<'a> {
             let kind = if p.keep { Kind::Keep } else if p.reuse { Kind::Reuse } else { Kind::Owned };
             if let Err(e) = scope.declare(&p.name, p.ty, kind) {
                 self.error(opener, e);
+            }
+            if p.reuse {
+                self.warn_useless_reuse(opener, p.ty);
             }
             let label = if p.keep { "keep" } else if p.reuse { "reuse" } else { "param" };
             self.declare_symbol(opener, &p.name, p.ty, label);
@@ -418,6 +442,9 @@ impl<'a> Parser<'a> {
                 (_, _, Some(Kind::Reuse)) => "reuse",
                 _ => "owned",
             };
+            if kind == "reuse" {
+                self.warn_useless_reuse(piece, *ty);
+            }
             self.declare_symbol(piece, name, *ty, kind);
         }
         let is_return = text.starts_with("return") && text.ends_with(';');
