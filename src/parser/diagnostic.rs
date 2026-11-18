@@ -187,11 +187,12 @@ impl Source {
     }
 }
 
-/// A token that can end a statement or a value: `)`, `]`, `;`, a literal, or a name.
+/// A token that can end a statement or a value: `)`, `]`, `;`, a literal, a name,
+/// or a bare `return`.
 fn ends_value(token: &Token) -> bool {
     match token {
         Token::Sym(s) => matches!(*s, ")" | "]" | ";"),
-        Token::Ident(w) => !KEYWORDS.contains(&w.as_str()) || w == "true" || w == "false",
+        Token::Ident(w) => !KEYWORDS.contains(&w.as_str()) || matches!(w.as_str(), "true" | "false" | "return"),
         Token::Str(_) | Token::Int(_) | Token::Float(_) => true,
     }
 }

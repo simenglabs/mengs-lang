@@ -91,18 +91,83 @@ fn keep_parameter_cannot_be_moved() {
 
 #[test]
 fn borrowed_and_moved_in_the_same_call_is_an_error() {
-    let msg = "is moved and borrowed by the same call";
+    let msg = "`name` is moved and also used in the same expression; C evaluation order is unspecified, so copy it first with `name ()=> new_name;`";
     let f = "fnc F(keep a: str, b: str)->\n    show(a);\n<-;\nset name: str = \"x\";\n";
     err(&format!("{f}F(name, name);"), 5, msg);
     err(&format!("{f}set r: str <== name;\nF(r, name);"), 6, msg);
     err(&format!("{f}F(name + \"y\", name);"), 5, msg);
-    let g = "fnc F(keep a: str, xs: [str])->\n    show(a);\n<-;\nset names: [str] = [\"x\"];\n";
-    err(&format!("{g}F(names[0], names);"), 5, msg);
+    let g = "fnc F(keep a: str, xs: [str])->\n    show(a);\n<-;\nset name: [str] = [\"x\"];\n";
+    err(&format!("{g}F(name[0], name);"), 5, "`name` is moved and also used in the same expression");
     let h = "fnc F(keep xs: [int], ys: [int])->\n    show(len(xs));\n<-;\nset a: [int] = [1];\n";
-    err(&format!("{h}F(a, a);"), 5, msg);
+    err(&format!("{h}F(a, a);"), 5, "`a` is moved and also used in the same expression");
     // Different variables, or a copy, are fine.
     ok(&format!("{f}set other: str = \"z\";\nF(name, other);"));
     ok(&format!("{f}name ()=> c;\nF(name, c);"));
+}
+
+/// The error column of the first error of `src`.
+fn first_error_at(src: &str) -> (usize, usize) {
+    let errors = parse(src).unwrap_err();
+    (errors[0].line, errors[0].column)
+}
+
+#[test]
+fn moved_and_used_in_the_same_expression_is_an_error() {
+    let msg = "`w` is moved and also used in the same expression; C evaluation order is unspecified, so copy it first with `w ()=> new_name;`";
+    let fns = "fnc F(keep a: str, b: str)->\n    show(a);\n<-;\n\
+               fnc K(keep a: str, keep b: str)->\n    show(a);\n<-;\n\
+               fnc H(a: str, b: str)->\n    show(a);\n<-;\n\
+               fnc G(s: str): str ->\n    return \"new\";\n<-;\n\
+               fnc A(keep a: [str], n: int)->\n    show(n);\n<-;\n\
+               fnc N(s: str): int ->\n    return 1;\n<-;\n\
+               fnc G2(xs: [str]): str ->\n    return \"new\";\n<-;\n\
+               set w: str = \"old\";\nset names: [str] = [\"a\"];\n";
+    // Lines 1-21 are the functions, 22-23 the variables: the code under test starts on line 24.
+    // A move nested in another argument.
+    err(&format!("{fns}F(w, G(w));"), 24, msg);
+    assert_eq!(first_error_at(&format!("{fns}F(w, G(w));")), (24, 8));
+    // A move nested in an operand.
+    err(&format!("{fns}show(w + G(w));"), 24, msg);
+    assert_eq!(first_error_at(&format!("{fns}show(w + G(w));")), (24, 12));
+    // Plain parameters: C may evaluate `G(w)` (which frees `w`) before `w + \"!\"`.
+    err(&format!("{fns}H(w + \"!\", G(w));"), 24, msg);
+    // Both parameters `keep`.
+    err(&format!("{fns}K(w, G(w));"), 24, msg);
+    // Through a `<==` alias.
+    err(&format!("{fns}set r: str <== w;\nF(r, G(w));"), 25, msg);
+    // An array behind an index.
+    err(&format!("{fns}F(names[0], G2(names));"), 24, "`names` is moved and also used in the same expression");
+    // An array borrowed by a keep parameter while a nested call moves it.
+    let arr = "set xs: [str] = [\"a\"];\n";
+    err(&format!("{fns}{arr}A(xs, len(G2(xs)));"), 25, "`xs` is moved and also used in the same expression");
+    // Nested deeper, and split over several lines (reported where the move is).
+    err(&format!("{fns}F(w,\n  G(w) + \"1\");"), 25, msg);
+    err(&format!("{fns}show(len(w)\n  + N(w));"), 25, msg);
+    err(&format!("{fns}F(\n  w,\n  G(w)\n);"), 26, msg);
+    assert_eq!(first_error_at(&format!("{fns}F(\n  w,\n  G(w)\n);")), (26, 5));
+    // Other statements: assignment value, return value, condition, push, item assignment.
+    err(&format!("{fns}set v: str = w + G(w);"), 24, msg);
+    err(&format!("{fns}set v: str = \"\";\nv = w + G(w);"), 25, msg);
+    err(&format!("{fns}if w = G(w) ->\n    show(1);\n<-;"), 24, msg);
+    err(&format!("{fns}while w = G(w) ->\n    show(1);\n<-;"), 24, msg);
+    err(&format!("{fns}push(names, w + G(w));"), 24, msg);
+    err(&format!("{fns}names[len(w)] = G(w);"), 24, msg);
+    err(&format!("{fns}names[0] = w + G(w);"), 24, msg);
+    err("fnc G(s: str): str ->\n    return \"new\";\n<-;\nfnc R(w: str): str ->\n    return w + G(w);\n<-;", 5, msg);
+}
+
+#[test]
+fn a_single_move_in_an_expression_is_fine() {
+    let fns = "fnc F(keep a: str, b: str)->\n    show(a);\n<-;\n\
+               fnc G(s: str): str ->\n    return \"new\";\n<-;\n\
+               set w: str = \"old\";\n";
+    ok(&format!("{fns}w = G(w);\nshow(w);"));
+    ok(&format!("{fns}set y: str = G(w);\nshow(y);"));
+    ok(&format!("{fns}set other: str = \"o\";\nF(other, G(w));"));
+    ok(&format!("{fns}w ()=> c;\nF(c, G(w));\nshow(c);"));
+    ok(&format!("{fns}w ()=> c;\nshow(c + G(w));"));
+    // Reads alone, and copies of scalars, never conflict.
+    ok(&format!("{fns}F(w, w + w);\nset n: int = 1;\nshow(n + n);"));
 }
 
 #[test]
@@ -912,6 +977,11 @@ fn multi_line_statement_with_tricky_string() {
 fn missing_semicolon_points_at_its_line() {
     err("show(1)\nshow(2);", 1, "missing `;`");
     err("show(1)", 1, "missing `;`");
+}
+
+#[test]
+fn bare_return_missing_semicolon_points_at_its_line() {
+    err("fnc F()->\n    return\n    show(1);\n<-;", 2, "missing `;`");
 }
 
 #[test]

@@ -2,9 +2,11 @@
 
 Meng has no garbage collector. Every value has one owner, and the compiler checks at
 compile time that a value is not used after it was handed to someone else. This guide
-describes the rules implemented today. The accepted direction for v1 (more ownership
-changes) is in [design/v1-decisions.md](../design/v1-decisions.md), section
-D3; this guide changes when those rules land.
+describes the ownership rules of decision D3 in
+[design/v1-decisions.md](../design/v1-decisions.md): `str` and arrays move, scalars
+(`int`, `float`, `bool`) are copied, `keep` parameters borrow, and borrows are local and
+read-only. The parts of D3 that apply to features Meng does not have yet (structs, maps,
+channels, and `spawn`) are added to this guide together with those features.
 
 ## Moves
 
@@ -60,6 +62,41 @@ show(a + b);
 `reuse` has no effect on a scalar (it is copied anyway), so the compiler prints a
 warning: ``Line 1: `reuse` has no effect on int values (they are always copied)``. A
 warning does not stop compilation; drop the `reuse` to silence it.
+
+## A moved variable cannot appear twice in one expression
+
+C does not fix the order in which it evaluates the arguments of a call or the two sides
+of an operator such as `+`. A function that receives a moved value may free it before
+another part of the same expression reads it. So when a variable is moved anywhere in an
+expression (also inside a nested call), it must not be used anywhere else in that
+expression: not directly, not through a `<==` borrow of it, and not as the array behind
+an index such as `names[0]`.
+
+```text
+fnc Tag(s: str): str ->
+    return s + "!";
+<-;
+set w: str = "meng";
+show(w + Tag(w));
+```
+
+```text
+[ERROR] file.meng:5:14: `w` is moved and also used in the same expression; C evaluation order is unspecified, so copy it first with `w ()=> new_name;`
+```
+
+Copy it first, so the expression uses two different variables:
+
+```meng
+fnc Tag(s: str): str ->
+    return s + "!";
+<-;
+set w: str = "meng";
+w ()=> before;
+show(before + Tag(w));
+```
+
+A single move is fine, also when the result goes back into the same variable:
+`w = Tag(w);`.
 
 ## Reading never moves
 

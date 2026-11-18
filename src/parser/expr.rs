@@ -51,11 +51,24 @@ pub struct ExprParser<'p, 's> {
     /// End of the statement (exclusive): the cursor never reads past it.
     pub end: usize,
     pub scope: &'s mut Scope,
+    /// Every variable the statement uses so far, in source order (see `check_moves`).
+    uses: Vec<Use>,
+}
+
+/// One occurrence of a variable in a statement.
+struct Use {
+    /// Token of the name.
+    at: usize,
+    name: String,
+    /// The variable that owns the value (the owner of a `<==` borrow, else the name itself).
+    root: String,
+    /// This occurrence moves the value out (a bare owned `str` or array given away).
+    moved: bool,
 }
 
 impl<'p, 's> ExprParser<'p, 's> {
     pub fn new(src: &'p Source, stmt: Statement, scope: &'s mut Scope) -> ExprParser<'p, 's> {
-        ExprParser { src, start: stmt.start, pos: stmt.start, end: stmt.end, scope }
+        ExprParser { src, start: stmt.start, pos: stmt.start, end: stmt.end, scope, uses: Vec::new() }
     }
 
     pub fn peek(&self) -> Option<&'p Token> {
@@ -119,9 +132,27 @@ impl<'p, 's> ExprParser<'p, 's> {
     pub fn finish(&mut self) -> Result<()> {
         if self.is(";") && self.pos + 1 == self.end {
             self.pos += 1;
-            return Ok(());
+            return self.check_moves();
         }
         Err(self.unexpected())
+    }
+
+    /// C does not fix the order in which it evaluates function arguments or the
+    /// operands of an operator, so a variable moved anywhere in a statement (and
+    /// possibly freed by the function it moves into) must not appear anywhere else
+    /// in it: not directly, not through a `<==` borrow, not as the array behind an index.
+    fn check_moves(&self) -> Result<()> {
+        for moved in self.uses.iter().filter(|u| u.moved) {
+            if self.uses.iter().any(|u| u.at != moved.at && u.root == moved.root) {
+                let message = format!(
+                    "`{0}` is moved and also used in the same expression; \
+                     C evaluation order is unspecified, so copy it first with `{0} ()=> new_name;`",
+                    moved.name
+                );
+                return Err(self.error_at(moved.at, message));
+            }
+        }
+        Ok(())
     }
 
     /// A name (not a keyword). Returns its token index and the name.
@@ -193,6 +224,7 @@ impl<'p, 's> ExprParser<'p, 's> {
         if expr.ty() != Type::Bool {
             return Err(self.error_at(at, format!("a condition must be bool, got {}", expr.ty().name())));
         }
+        self.check_moves()?;
         Ok(expr)
     }
 
@@ -478,6 +510,8 @@ impl<'p, 's> ExprParser<'p, 's> {
                 _ => {
                     let name = parse_identifier(word).map_err(|e| self.error_at(at, e))?;
                     let ty = self.scope.access(&name, self.line(at), Access::Read).map_err(|e| self.error_at(at, e))?;
+                    let root = self.scope.borrow_root(&name).unwrap_or_else(|| name.clone());
+                    self.uses.push(Use { at, name: name.clone(), root, moved: false });
                     Ok(Expr::Var { name, ty, moved: false })
                 }
             },
@@ -530,47 +564,10 @@ impl<'p, 's> ExprParser<'p, 's> {
                 }
             }
         }
-        self.check_borrow_conflicts(name, &args, &params).map_err(|(i, e)| self.error_at(starts[i], e))?;
         let sig = self.scope.function(name).expect("checked above");
         let ret = sig.ret;
         let args = check_call(sig, args).map_err(|(i, e)| self.error_at(i.map_or(name_at, |i| starts[i]), e))?;
         Ok((args, ret))
-    }
-
-    /// A value borrowed by a `keep` parameter must stay alive during the whole call, so
-    /// no other argument of the same call may move a variable the borrowed one reads
-    /// (directly, through a `<==` borrow, or as an element of an array).
-    /// The error carries the index of the moved argument.
-    fn check_borrow_conflicts(
-        &self,
-        name: &str,
-        args: &[Expr],
-        params: &[(Type, bool)],
-    ) -> std::result::Result<(), (usize, String)> {
-        let mut roots: Vec<String> = Vec::new();
-        for (arg, (_, borrows)) in args.iter().zip(params) {
-            if *borrows {
-                let mut names = Vec::new();
-                var_names(arg, &mut names);
-                for n in names {
-                    roots.push(self.scope.borrow_root(&n).unwrap_or(n));
-                }
-            }
-        }
-        for (i, arg) in args.iter().enumerate() {
-            if let Expr::Var { name: moved, moved: true, .. } = arg {
-                if roots.contains(moved) {
-                    return Err((
-                        i,
-                        format!(
-                            "`{}` is moved and borrowed by the same call to `{}`; copy it with `{} ()=> new_name;` first",
-                            moved, name, moved
-                        ),
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 
     /// A bare variable given away (`set y: T = x;`, `F(x)`, `return x;`); `at` is
@@ -584,6 +581,9 @@ impl<'p, 's> ExprParser<'p, 's> {
         }
         self.scope.access(&name, self.line(at), Access::Move).map_err(|e| self.error_at(at, e))?;
         let moved = self.scope.is_owned(&name);
+        if let Some(u) = self.uses.iter_mut().find(|u| u.at == at) {
+            u.moved = moved;
+        }
         Ok(Expr::Var { name, ty, moved })
     }
 
@@ -641,28 +641,4 @@ pub fn parse_identifier(s: &str) -> std::result::Result<String, String> {
         return Err(format!("`{}` is a keyword and cannot be used as a name", s));
     }
     Ok(s.to_string())
-}
-
-/// Every variable an expression reads.
-fn var_names(expr: &Expr, out: &mut Vec<String>) {
-    match expr {
-        Expr::Var { name, .. } => out.push(name.clone()),
-        Expr::Str(_) | Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) => {}
-        Expr::Unary { expr, .. } | Expr::Convert { expr, .. } | Expr::Len(expr) => var_names(expr, out),
-        Expr::Binary { lhs, rhs, .. } => {
-            var_names(lhs, out);
-            var_names(rhs, out);
-        }
-        Expr::Call { args, .. } => args.iter().for_each(|a| var_names(a, out)),
-        Expr::Array { items, .. } => items.iter().for_each(|a| var_names(a, out)),
-        Expr::Index { array, index, .. } => {
-            var_names(array, out);
-            var_names(index, out);
-        }
-        Expr::Read { prompt } => {
-            if let Some(p) = prompt {
-                var_names(p, out);
-            }
-        }
-    }
 }
