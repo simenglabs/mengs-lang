@@ -1,0 +1,208 @@
+# Ownership guide
+
+Meng has no garbage collector. Every value has one owner, and the compiler checks at
+compile time that a value is not used after it was handed to someone else. This guide
+describes the rules implemented today. The accepted direction for v1 (scalars copied,
+`keep` parameters borrowing) is in [design/v1-decisions.md](../design/v1-decisions.md),
+section D3; this guide changes when those rules land.
+
+## Moves
+
+A variable is **moved** when it is used as a bare name in one of these places:
+
+- assigned to another variable: `set y: str = x;`
+- passed to a function: `Greet(x);`
+- returned: `return x;`
+- pushed into an array: `push(items, x);`
+
+After a move the old variable cannot be read until it gets a new value.
+
+```meng
+fnc Greet(name: str)->
+    show(name);
+<-;
+
+set a: str = "Meng";
+set b: str = a;
+show(b);
+Greet(b);
+```
+
+Using a moved variable is an error:
+
+```text
+set a: str = "Meng";
+set b: str = a;
+show(a);
+```
+
+```text
+[ERROR] file.meng:3:6: variable `a` was moved on line 2 and can no longer be used; declare it with `reuse`, borrow it with `<==`, or copy it with `a ()=> new_name;`
+```
+
+Today this applies to every type, including `int`, `float`, and `bool`.
+
+## Reading never moves
+
+A variable that is only read is not moved: `show(x)`, a condition, or anywhere inside a
+larger expression such as `a + b`, `len(x)`, or `x[0]`.
+
+```meng
+set a: int = 2;
+set b: int = 3;
+set total: int = a + b;
+show(a);
+show(total);
+if a < b ->
+    show("a is smaller");
+<-;
+```
+
+## Reassigning makes a variable usable again
+
+Giving a moved variable a new value makes it usable again.
+
+```meng
+set word: str = "first";
+set taken: str = word;
+word = "second";
+show(word);
+show(taken);
+```
+
+## `keep` and `reuse`
+
+- `set keep x: T = ...;` is a constant. It cannot be reassigned. When a `keep` value
+  would be moved, it is copied instead, so it stays usable.
+- `set reuse x: T = ...;` can be moved any number of times: each move copies the value.
+  For strings and arrays this is a full copy (cost proportional to the size), so use
+  `reuse` for small values and convenience.
+- On parameters, `keep` and `reuse` describe the parameter inside the function (a `keep`
+  parameter cannot be reassigned; a `reuse` parameter can be moved many times there).
+  The caller's variable is still moved by the call unless it is `keep` or `reuse` itself.
+
+```meng
+fnc Greet(name: str)->
+    show(name);
+<-;
+
+set keep owner: str = "nasri";
+set reuse lang: str = "Meng";
+Greet(owner);
+Greet(owner);
+Greet(lang);
+Greet(lang);
+show(owner);
+```
+
+## Borrow: `<==`
+
+`set r: T <== x;` makes `r` a read-only view of `x`. The owner `x` stays usable and
+nothing is copied.
+
+```meng
+fnc Greet(name: str)->
+    show(name);
+<-;
+
+set city: str = "Jakarta";
+set city_ref: str <== city;
+Greet(city_ref);
+show(city);
+```
+
+A borrow becomes invalid when its owner is moved, reassigned, or changed. Using the
+borrow afterwards is an error:
+
+```text
+set c: str = "a";
+set r: str <== c;
+c = "b";
+show(r);
+```
+
+```text
+[ERROR] file.meng:4:6: `r` borrows `c`, but `c` got a new value on line 3; borrow it again
+```
+
+```text
+set c: str = "a";
+set r: str <== c;
+set d: str = c;
+show(r);
+```
+
+```text
+[ERROR] file.meng:4:6: `r` borrows `c`, but `c` was moved on line 3
+```
+
+## Copy: `()=>`
+
+`x ()=> y;` copies `x` into a new, independent variable `y`. Both stay usable.
+
+```meng
+fnc Greet(name: str)->
+    show(name);
+<-;
+
+set country: str = "Indonesia";
+country ()=> country_copy;
+Greet(country);
+Greet(country_copy);
+```
+
+## Moves inside `if` and loops
+
+A move inside an `if` branch counts afterwards: the variable may have been moved, so it
+cannot be used after the `if`.
+
+```text
+set x: str = "a";
+if true ->
+    set y: str = x;
+<-;
+show(x);
+```
+
+```text
+[ERROR] file.meng:5:6: variable `x` was moved on line 3 and can no longer be used; declare it with `reuse`, borrow it with `<==`, or copy it with `x ()=> new_name;`
+```
+
+A move inside a `while` loop of a variable declared outside the loop is an error,
+because the next iteration would use it again. Use `reuse`, borrow it, copy it, or give
+it a new value before the loop repeats.
+
+```text
+fnc Take(s: str)->
+<-;
+set x: str = "a";
+while true ->
+    Take(x);
+<-;
+```
+
+```text
+[ERROR] file.meng:5:10: variable `x` is moved inside a loop, so the next iteration could not use it; declare it with `reuse`, borrow it, copy it, or give it a new value before the loop repeats
+```
+
+A variable declared inside the loop body is new in every iteration, so moving it is fine.
+
+```meng
+fnc Take(s: str)->
+    show(s);
+<-;
+
+set i: int = 0;
+while i < 2 ->
+    set label: str = "item " + str(i);
+    Take(label);
+    i = i + 1;
+<-;
+```
+
+## Memory
+
+Strings and arrays live on the heap. The compiler frees them automatically when the
+block that owns them ends (a function, `if`, or `while` body), including on an early
+`return`. A move hands the memory over without copying it, so the new owner frees it.
+There is nothing to free by hand and no way to free twice.

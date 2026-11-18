@@ -32,17 +32,16 @@ meng interpret test/main.meng
 
 The CLI also supports `check`, `compile`, `run`, and `emit` (prints the generated C).
 
-Dependencies are listed in `deps.meow` (`name:version` per line) and imported with `use "name";`:
+Dependencies, the installer options, and the editor extension are described in the
+[tooling guide](docs/guide/tooling.md).
 
-```bash
-meng add postgres:0.1.0   # add or change a dependency, then install it
-meng deps                 # install / update / remove packages to match deps.meow
-```
-Language syntax and usage guides will live in the documentation.
+## Documentation
+
+Language, ownership, and tooling guides: [docs/README.md](docs/README.md).
 
 ## Development
 
 Run `cargo test` to check the compiler and interpreter.
 
 - [VS Code extension](editors/vscode/README.md)
-- [Roadmap](TODO.md)
+- [Roadmap](PLAN.md)
