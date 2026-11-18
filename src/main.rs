@@ -111,7 +111,7 @@ fn main() {
         process::exit(1);
     });
 
-    // `use "x.meng";` resolves from the file's folder (the current folder for stdin).
+    // `use "x" meow Function;` resolves from the file's folder (the current folder for stdin).
     let dir = match Path::new(filename).parent() {
         Some(p) if filename != "-" && !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => Path::new(".").to_path_buf(),

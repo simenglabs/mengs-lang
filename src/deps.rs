@@ -6,7 +6,7 @@
 //! - A package is a git repository tagged `v<version>`, with `lib.meng` as its entry
 //!   file and optionally its own `deps.meow`.
 //! - Packages are installed into `meng_deps/<name>/` of the project (flat: a
-//!   package's own dependencies go there too) and imported with `use "name";`.
+//!   package's own dependencies go there too) and imported with `use "name" meow Function;`.
 
 use std::collections::HashMap;
 use std::env;

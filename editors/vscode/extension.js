@@ -27,7 +27,7 @@ function compilerPath() {
   return INSTALLED.find((p) => fs.existsSync(p)) || configured;
 }
 
-/** The document's folder: `use "x.meng";` resolves from there. */
+/** The document's folder: `use "x" meow Function;` resolves from there. */
 function workingDir(document) {
   return path.dirname(document.uri.fsPath);
 }

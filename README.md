@@ -32,12 +32,34 @@ meng interpret test/main.meng
 
 The CLI also supports `check`, `compile`, `run`, and `emit` (prints the generated C).
 
-Dependencies are listed in `deps.meow` (`name:version` per line) and imported with `use "name";`:
+Dependencies are listed in `deps.meow` (`name:version` per line) and imported with `use "name" meow Function;`:
 
 ```bash
 meng add postgres:0.1.0   # add or change a dependency, then install it
 meng deps                 # install / update / remove packages to match deps.meow
 ```
+Import selected functions from another file:
+
+```meng
+use "greetings" meow Hello, Goodbye;
+show(Hello("Meng"));
+```
+
+For files inside folders, separate the module names with dots:
+
+```meng
+use "utils.parser" meow func_1, func_2;
+```
+
+This loads `utils/parser.meng` relative to the current source file. More levels
+work the same way: `utils.text.parser` loads `utils/text/parser.meng`.
+
+The earlier `greetings` example loads `greetings.meng`. An explicit
+`.meng` extension also works. If an extensionless local file does not exist,
+Meng looks for an installed package. Only functions listed after `meow` are
+available to the importing file. The list is required; replace old
+`use "greetings";` imports with `use "greetings" meow Hello;`.
+
 Language syntax and usage guides will live in the documentation.
 
 ## Development

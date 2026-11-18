@@ -2,7 +2,7 @@
   "name": "meng-lang",
   "displayName": "Meng Language",
   "description": "Syntax highlighting, IntelliSense, and live diagnostics for the Meng language",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "menglabs",
   "icon": "icon.png",
   "repository": {

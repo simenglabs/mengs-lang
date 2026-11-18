@@ -1,8 +1,8 @@
-//! `use "file.meng";` — load imported files; `use "name";` — load an installed
+//! `use "file" meow Function;` — load selected functions from a local file or
 //! package (`meng_deps/name/lib.meng`, see `deps.rs`).
 //!
 //! An imported file may only contain functions (and its own `use`). A file sees
-//! its own functions plus every function its imports provide (transitively).
+//! its own functions plus the functions explicitly selected by its imports.
 //! All functions end up in one program, so names must be unique across files.
 
 use std::collections::{HashMap, HashSet};
@@ -14,6 +14,7 @@ use crate::deps;
 
 use super::comments::strip_comments;
 use super::diagnostic::{Diagnostic, diagnostic, split_pieces};
+use super::expr::parse_identifier;
 use super::symbols::{FunctionSymbol, Symbols};
 use super::{Imported, analyze};
 
@@ -26,24 +27,61 @@ pub struct SourceError {
     pub diagnostic: Diagnostic,
 }
 
-/// `use "path.meng";` -> `path.meng` (a file), `use "name";` -> `name` (a package).
-pub fn parse_use(text: &str) -> Result<String, String> {
-    let usage = "invalid use, example: use \"math.meng\"; or use \"package\";";
-    let path = text.strip_prefix("use ").and_then(|s| s.strip_suffix(';')).ok_or(usage)?.trim();
-    let path = path.strip_prefix('"').and_then(|s| s.strip_suffix('"')).ok_or(usage)?;
-    if path.contains('"') || !(path.ends_with(".meng") || deps::is_package_name(path)) {
-        return Err(format!(
-            "`{}` is neither a .meng file nor a package name, example: use \"math.meng\"; or use \"package\";",
-            path
-        ));
+/// A module path and the functions selected by its `meow` list.
+#[derive(Debug, PartialEq)]
+pub struct Use {
+    pub path: String,
+    pub functions: Vec<String>,
+}
+
+/// Dots separate module components: `utils.parser` -> `utils/parser.meng`.
+fn is_dotted_module(path: &str) -> bool {
+    path.contains('.') && path.split('.').all(|part| {
+        !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
+pub fn parse_use(text: &str) -> Result<Use, String> {
+    let usage = "invalid use, example: use \"greetings\" meow function_1, function_2;";
+    let rest = text.strip_prefix("use ").and_then(|s| s.strip_suffix(';')).ok_or(usage)?.trim();
+    let rest = rest.strip_prefix('"').ok_or(usage)?;
+    let (path, rest) = rest.split_once('"').ok_or(usage)?;
+    if path.is_empty() || !(path.ends_with(".meng") || Path::new(path).extension().is_none() || is_dotted_module(path)) {
+        return Err(format!("invalid module path `{}`; expected a .meng file, a module name such as utils.parser, or a package name", path));
     }
-    Ok(path.to_string())
+    if !rest.starts_with(char::is_whitespace) {
+        return Err(usage.into());
+    }
+    let names = rest.trim_start().strip_prefix("meow").ok_or(usage)?;
+    if !names.starts_with(char::is_whitespace) || names.trim().is_empty() {
+        return Err(usage.into());
+    }
+    let mut functions = Vec::new();
+    for name in names.split(',') {
+        let name = parse_identifier(name.trim())?;
+        if functions.contains(&name) {
+            return Err(format!("function `{}` is listed more than once in this import", name));
+        }
+        functions.push(name);
+    }
+    Ok(Use { path: path.to_string(), functions })
 }
 
 /// Where an import points: a file relative to `dir`, or an installed package.
 fn resolve(dir: &Path, path: &str) -> Result<(PathBuf, String), String> {
     if path.ends_with(".meng") {
         return Ok((dir.join(path), display_path(dir, path)));
+    }
+    let local = if is_dotted_module(path) {
+        format!("{}.meng", path.replace('.', "/"))
+    } else {
+        format!("{}.meng", path)
+    };
+    if dir.join(&local).is_file() {
+        return Ok((dir.join(&local), display_path(dir, &local)));
+    }
+    if !deps::is_package_name(path) {
+        return Err(format!("cannot find `{}` (looked for {})", path, dir.join(&local).display()));
     }
     let found = deps::find_package(dir, path).ok_or_else(|| {
         format!(
@@ -128,10 +166,10 @@ impl Loader {
         let Ok(stripped) = strip_comments(code) else {
             return (imported, symbols, true); // reported by `analyze`
         };
-        let mut seen = HashSet::new();
         for piece in split_pieces(&stripped) {
-            let Ok(path) = piece.text.strip_prefix("use ").map(|_| parse_use(piece.text)).transpose() else { continue };
-            let Some(path) = path else { continue };
+            let Ok(import) = piece.text.strip_prefix("use ").map(|_| parse_use(piece.text)).transpose() else { continue };
+            let Some(import) = import else { continue };
+            let path = import.path;
             let fail = |loader: &mut Loader, message: String| {
                 loader.errors.push(SourceError { file: name.into(), code: code.into(), diagnostic: diagnostic(piece, message) });
             };
@@ -149,9 +187,6 @@ impl Loader {
                 ok = false;
                 continue;
             };
-            if !seen.insert(canonical.clone()) {
-                continue; // the same file used twice
-            }
             if let Some(start) = self.loading.iter().position(|p| *p == canonical) {
                 let cycle: Vec<String> = self.loading[start..].iter().chain([&canonical]).map(|p| file_name(p)).collect();
                 fail(self, format!("import cycle: `{}` ({})", path, cycle.join(" -> ")));
@@ -181,8 +216,16 @@ impl Loader {
                 }
             }
 
-            // Bring the file's functions (and what it imports) into scope.
-            for (fn_name, (sig, file)) in self.exports.get(&canonical).cloned().unwrap_or_default() {
+            // Only selected functions become visible; the full module still loads
+            // so imported functions can call their own helpers.
+            let exports = self.exports.get(&canonical).cloned().unwrap_or_default();
+            let selected: HashSet<_> = import.functions.iter().cloned().collect();
+            for fn_name in import.functions {
+                let Some((sig, file)) = exports.get(&fn_name).cloned() else {
+                    fail(self, format!("module `{}` has no function `{}`", path, fn_name));
+                    ok = false;
+                    continue;
+                };
                 match imported.get(&fn_name) {
                     Some((_, other)) if *other != file => {
                         fail(self, format!("function `{}` is defined in both `{}` and `{}`", fn_name, other, file));
@@ -194,7 +237,7 @@ impl Loader {
                 }
             }
             for f in self.export_symbols.get(&canonical).into_iter().flatten() {
-                if !symbols.iter().any(|s: &FunctionSymbol| s.sig.name == f.sig.name) {
+                if selected.contains(&f.sig.name) && !symbols.iter().any(|s: &FunctionSymbol| s.sig.name == f.sig.name) {
                     symbols.push(FunctionSymbol { sig: f.sig.clone(), file: f.file.clone(), ..*f });
                 }
             }
@@ -266,8 +309,8 @@ mod tests {
     #[test]
     fn imports_functions_transitively() {
         let dir = folder(&[
-            ("main.meng", "use \"lib/math.meng\";\nshow(Square(3));\nshow(Label(\"x\", 1));"),
-            ("lib/math.meng", "use \"text.meng\";\nfnc Square(n: int): int -> return n * n; <-;"),
+            ("main.meng", "use \"lib/math.meng\" meow Square, Label;\nshow(Square(3));\nshow(Label(\"x\", 1));"),
+            ("lib/math.meng", "use \"text.meng\" meow Label;\nfnc Square(n: int): int -> return n * n; <-;"),
             ("lib/text.meng", "fnc Label(s: str, n: int): str -> return s + str(n); <-;"),
         ]);
         let code = fs::read_to_string(dir.join("main.meng")).unwrap();
@@ -289,7 +332,7 @@ mod tests {
     #[test]
     fn import_errors() {
         let dir = folder(&[
-            ("a.meng", "use \"missing.meng\";\nuse \"lib.meng\";\nuse \"other.meng\";\nfnc F(): int -> return 9; <-;"),
+            ("a.meng", "use \"missing.meng\" meow F;\nuse \"lib.meng\" meow F;\nuse \"other.meng\" meow F;\nfnc F(): int -> return 9; <-;"),
             ("lib.meng", "fnc F(): int -> return 1; <-;\nshow(1);"),
             ("other.meng", "fnc F(): int -> return 2; <-;"),
         ]);
@@ -309,18 +352,98 @@ mod tests {
     #[test]
     fn import_cycles_are_reported() {
         let dir = folder(&[
-            ("cyc.meng", "use \"one.meng\";"),
-            ("one.meng", "use \"two.meng\";\nfnc One(): int -> return 1; <-;"),
-            ("two.meng", "use \"one.meng\";\nfnc Two(): int -> return 2; <-;"),
+            ("cyc.meng", "use \"one.meng\" meow One;"),
+            ("one.meng", "use \"two.meng\" meow Two;\nfnc One(): int -> return 1; <-;"),
+            ("two.meng", "use \"one.meng\" meow One;\nfnc Two(): int -> return 2; <-;"),
         ]);
         let errs = errors(&dir, "cyc.meng");
         assert!(errs.iter().any(|e| e.contains("import cycle: `one.meng` (one.meng -> two.meng -> one.meng)")), "{errs:#?}");
     }
 
     #[test]
+    fn selected_imports_keep_helpers_and_filter_editor_symbols() {
+        let dir = folder(&[
+            ("select.meng", "use \"greetings\" meow function_1, function_2;\nshow(function_1());\nshow(function_2());"),
+            ("greetings.meng", "fnc helper(): int -> return 7; <-;\nfnc function_1(): int -> return helper(); <-;\nfnc function_2(): int -> return 9; <-;"),
+        ]);
+        let code = fs::read_to_string(dir.join("select.meng")).unwrap();
+        let program = parse_file("select.meng", &code, &dir).unwrap();
+        assert_eq!(program.functions.len(), 3, "helpers must remain available at runtime");
+        let mut output = Vec::new();
+        crate::interpreter::run(&program, &mut std::io::Cursor::new(""), &mut output).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "7\n9\n");
+        let symbols = symbols_file("select.meng", &code, &dir);
+        let names: Vec<_> = symbols.functions.iter().map(|f| f.sig.name.as_str()).collect();
+        assert_eq!(names, vec!["function_1", "function_2"]);
+        let bad = format!("{code}\nshow(helper());");
+        let errors = parse_file("select.meng", &bad, &dir).unwrap_err();
+        assert!(errors.iter().any(|e| e.diagnostic.message.contains("helper")));
+    }
+
+    #[test]
+    fn repeated_imports_select_additional_functions() {
+        let dir = folder(&[
+            ("repeat.meng", "use \"lib\" meow A;\nuse \"lib.meng\" meow B;\nuse \"lib\" meow A;\nshow(A() + B());"),
+            ("lib.meng", "fnc A(): int -> return 1; <-;\nfnc B(): int -> return 2; <-;"),
+        ]);
+        assert!(errors(&dir, "repeat.meng").is_empty());
+        let code = fs::read_to_string(dir.join("repeat.meng")).unwrap();
+        assert_eq!(parse_file("repeat.meng", &code, &dir).unwrap().functions.len(), 2);
+    }
+
+    #[test]
+    fn missing_selected_function_is_reported_at_import() {
+        let dir = folder(&[
+            ("missing-name.meng", "use \"lib\" meow Missing;"),
+            ("lib.meng", "fnc Available()-> <-;"),
+        ]);
+        assert!(errors(&dir, "missing-name.meng").iter().any(|e| e == "missing-name.meng:1: module `lib` has no function `Missing`"));
+    }
+
+    #[test]
+    fn package_imports_and_local_file_precedence() {
+        let dir = folder(&[
+            ("packages.meng", "use \"greetings\" meow Local;\nuse \"installed\" meow Packaged;\nshow(Local() + Packaged());"),
+            ("greetings.meng", "fnc Local(): int -> return 1; <-;"),
+            ("meng_deps/greetings/lib.meng", "fnc Other()-> <-;"),
+            ("meng_deps/installed/lib.meng", "fnc Packaged(): int -> return 2; <-;"),
+        ]);
+        assert!(errors(&dir, "packages.meng").is_empty());
+    }
+
+    #[test]
+    fn dotted_modules_resolve_nested_files_and_relative_imports() {
+        let dir = folder(&[
+            ("dotted.meng", "use \"utils.parser\" meow func_1, func_2;\nshow(func_1());\nshow(func_2());"),
+            ("utils/parser.meng", "use \"nested.helper\" meow helper;\nfnc func_1(): int -> return helper(); <-;\nfnc func_2(): int -> return 2; <-;"),
+            ("utils/nested/helper.meng", "fnc helper(): int -> return 1; <-;"),
+        ]);
+        let code = fs::read_to_string(dir.join("dotted.meng")).unwrap();
+        let program = parse_file("dotted.meng", &code, &dir).unwrap();
+        let mut output = Vec::new();
+        crate::interpreter::run(&program, &mut std::io::Cursor::new(""), &mut output).unwrap();
+        assert_eq!(output, b"1\n2\n");
+        let symbols = symbols_file("dotted.meng", &code, &dir);
+        assert_eq!(symbols.functions.len(), 2);
+        assert!(symbols.functions.iter().all(|f| f.file.as_ref().unwrap().ends_with("utils/parser.meng")));
+        let errors = parse_file("dotted.meng", "use \"utils.missing\" meow F;", &dir).unwrap_err();
+        assert!(errors.iter().any(|e| e.diagnostic.message.contains("utils/missing.meng")));
+    }
+
+    #[test]
     fn use_syntax() {
-        assert_eq!(parse_use("use \"a/b.meng\";"), Ok("a/b.meng".to_string()));
-        assert!(parse_use("use a.meng;").is_err());
-        assert!(parse_use("use \"a.txt\";").is_err());
+        assert_eq!(
+            parse_use("use \"greetings\" meow function_1, function_2;"),
+            Ok(Use { path: "greetings".into(), functions: vec!["function_1".into(), "function_2".into()] })
+        );
+        assert!(parse_use("use \"a/b.meng\" meow F;").is_ok());
+        for source in [
+            "use a.meng meow F;", "use \"utils..parser\" meow F;", "use \"a\";",
+            "use \"a\" meow;", "use \"a\" meow F,;", "use \"a\" meow F F;",
+            "use \"a\" meow F, F;", "use \"a\" meow 123;", "use \"a\" meow return;",
+            "use \"a\"meow F;", "use \"a\" meowF;", "use \"\" meow F;",
+        ] {
+            assert!(parse_use(source).is_err(), "{source}");
+        }
     }
 }

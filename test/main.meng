@@ -3,7 +3,7 @@
   Comments start and end with a percent sign and can span multiple lines.
 %
 
-use "greetings.meng";   % functions from another file %
+use "greetings" meow Hello;   % functions from another file %
 
 fnc Example(title: str)->
     show(title);
@@ -192,10 +192,7 @@ while step < 3 ->
     step = step + 1;
 <-;
 show(trail + "end");
-% read() reads a line of input, for example: set name: str = read("Name: "); %
 
-% Arrays: [int], [float], [str], [bool]. They follow the same ownership %
-% rules as strings and are freed automatically.                         %
 fnc Total(keep items: [int]): int ->
     set sum: int = 0;
     set reuse i: int = 0;

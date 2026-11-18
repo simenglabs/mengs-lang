@@ -21,8 +21,8 @@
   },
   "Use": {
     "prefix": "use",
-    "body": ["use \"${1:file}.meng\";"],
-    "description": "Import the functions of another file"
+    "body": ["use \"${1:file}\" meow ${2:Function};"],
+    "description": "Import selected functions from a file or package"
   },
   "If": {
     "prefix": "if",

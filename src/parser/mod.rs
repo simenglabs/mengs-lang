@@ -9,7 +9,7 @@
 //! - `scope.rs`    — variable tracking (types, ownership: move / reuse / borrow / reassign)
 //! - `check.rs`    — function call checks (argument count/types, defaults)
 //! - `symbols.rs`  — functions, variables, and ownership events for editors (`meng symbols`)
-//! - `modules.rs`  — `use "file.meng";`: loading imported files
+//! - `modules.rs`  — `use "file" meow Function;`: loading imported files
 
 mod check;
 mod comments;

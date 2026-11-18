@@ -46,7 +46,7 @@
     "keywords": {
       "patterns": [
         { "name": "keyword.control.meng", "match": "\\b(if|else|while|return)\\b" },
-        { "name": "keyword.other.meng", "match": "\\b(set|show|use)\\b" },
+        { "name": "keyword.other.meng", "match": "\\b(set|show|use|meow)\\b" },
         { "name": "storage.modifier.meng", "match": "\\b(keep|reuse)\\b" },
         { "name": "keyword.operator.logical.meng", "match": "\\b(and|or|not)\\b" },
         { "name": "keyword.operator.arithmetic.meng", "match": "\\bmod\\b" }

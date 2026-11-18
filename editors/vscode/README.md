@@ -4,14 +4,27 @@ Language support for [Meng](../../README.md) (`.meng`).
 
 ## Features
 
-- Syntax highlighting
+- Syntax highlighting, including `use` and `meow` imports
 - Live errors from the real compiler (`meng check`), as you type, all at once and underlined at their column
 - Completion: keywords, types after `:`, built-ins, functions (with argument snippets), and the variables
   usable at the cursor (block scopes of `if`/`while`, moved variables hidden), using `meng symbols`
 - Hover (variable types, function signatures) and signature help
 - Go to definition
-- Snippets: `fnc`, `if`, `ife`, `elif`, `set`, `setk`, `setr`, `borrow`, `copy`, `show`, `%`
+- Snippets: `fnc`, `if`, `ife`, `elif`, `set`, `setk`, `setr`, `borrow`, `copy`, `show`, `use`, `%`
 - Commands: **Meng: Run File (Interpreter)**, **Meng: Compile & Run File (GCC)**
+
+## Imports
+
+The `use` snippet inserts `use "file" meow Function;`. List multiple functions
+with commas; dots in module names separate folders:
+
+```meng
+use "utils.parser" meow func_1, func_2;
+```
+
+This loads `utils/parser.meng` relative to the current file. Completion, hover,
+and go to definition use the selected imports reported by the compiler.
+Update the compiler alongside the extension when changing language syntax.
 
 ## Requirements
 
