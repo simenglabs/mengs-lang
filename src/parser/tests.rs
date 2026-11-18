@@ -90,6 +90,22 @@ fn keep_parameter_cannot_be_moved() {
 }
 
 #[test]
+fn borrowed_and_moved_in_the_same_call_is_an_error() {
+    let msg = "is moved and borrowed by the same call";
+    let f = "fnc F(keep a: str, b: str)->\n    show(a);\n<-;\nset name: str = \"x\";\n";
+    err(&format!("{f}F(name, name);"), 5, msg);
+    err(&format!("{f}set r: str <== name;\nF(r, name);"), 6, msg);
+    err(&format!("{f}F(name + \"y\", name);"), 5, msg);
+    let g = "fnc F(keep a: str, xs: [str])->\n    show(a);\n<-;\nset names: [str] = [\"x\"];\n";
+    err(&format!("{g}F(names[0], names);"), 5, msg);
+    let h = "fnc F(keep xs: [int], ys: [int])->\n    show(len(xs));\n<-;\nset a: [int] = [1];\n";
+    err(&format!("{h}F(a, a);"), 5, msg);
+    // Different variables, or a copy, are fine.
+    ok(&format!("{f}set other: str = \"z\";\nF(name, other);"));
+    ok(&format!("{f}name ()=> c;\nF(name, c);"));
+}
+
+#[test]
 fn keep_parameter_can_be_copied_and_reborrowed() {
     ok("fnc G(keep s: str)->\n<-;\nfnc F(keep s: str): str ->\n    G(s);\n    s ()=> t;\n    return t;\n<-;");
 }

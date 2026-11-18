@@ -425,9 +425,37 @@ impl ExprParser<'_> {
                 }
             }
         }
+        self.check_borrow_conflicts(name, &args, &params)?;
         let sig = self.scope.function(name).expect("checked above");
         let ret = sig.ret;
         Ok((check_call(sig, args)?, ret))
+    }
+
+    /// A value borrowed by a `keep` parameter must stay alive during the whole call, so
+    /// no other argument of the same call may move a variable the borrowed one reads
+    /// (directly, through a `<==` borrow, or as an element of an array).
+    fn check_borrow_conflicts(&self, name: &str, args: &[Expr], params: &[(Type, bool)]) -> Result<(), String> {
+        let mut roots: Vec<String> = Vec::new();
+        for (arg, (_, borrows)) in args.iter().zip(params) {
+            if *borrows {
+                let mut names = Vec::new();
+                var_names(arg, &mut names);
+                for n in names {
+                    roots.push(self.scope.borrow_root(&n).unwrap_or(n));
+                }
+            }
+        }
+        for arg in args {
+            if let Expr::Var { name: moved, moved: true, .. } = arg {
+                if roots.contains(moved) {
+                    return Err(format!(
+                        "`{}` is moved and borrowed by the same call to `{}`; copy it with `{} ()=> new_name;` first",
+                        moved, name, moved
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// A bare variable given away (`set y: T = x;`, `F(x)`, `return x;`).
@@ -522,4 +550,28 @@ pub fn parse_identifier(s: &str) -> Result<String, String> {
         return Err(format!("`{}` is a keyword and cannot be used as a name", s));
     }
     Ok(s.to_string())
+}
+
+/// Every variable an expression reads.
+fn var_names(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::Var { name, .. } => out.push(name.clone()),
+        Expr::Str(_) | Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) => {}
+        Expr::Unary { expr, .. } | Expr::Convert { expr, .. } | Expr::Len(expr) => var_names(expr, out),
+        Expr::Binary { lhs, rhs, .. } => {
+            var_names(lhs, out);
+            var_names(rhs, out);
+        }
+        Expr::Call { args, .. } => args.iter().for_each(|a| var_names(a, out)),
+        Expr::Array { items, .. } => items.iter().for_each(|a| var_names(a, out)),
+        Expr::Index { array, index, .. } => {
+            var_names(array, out);
+            var_names(index, out);
+        }
+        Expr::Read { prompt } => {
+            if let Some(p) = prompt {
+                var_names(p, out);
+            }
+        }
+    }
 }

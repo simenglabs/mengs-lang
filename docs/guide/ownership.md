@@ -148,7 +148,6 @@ Greet(lang);
 Greet(lang);
 show(owner);
 ```
-```
 
 ## Borrow: `<==`
 
