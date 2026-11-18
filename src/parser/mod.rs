@@ -28,12 +28,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::{Expr, Function, Program, Signature, Stmt, always_returns};
-use comments::strip_comments;
 pub use diagnostic::Diagnostic;
 use diagnostic::{Piece, diagnostic, split_pieces};
 use expr::{BUILTINS, parse_condition, parse_typed};
 use scope::{Access, Kind, Scope};
 use stmt::{check_assign, declare_after_error, parse_fn_header, parse_stmt};
+pub use comments::strip_comments;
 pub use modules::{SourceError, parse_file, symbols_file};
 pub use symbols::Symbols;
 use symbols::{FunctionSymbol, VariableSymbol};

@@ -1,4 +1,5 @@
-//! `use "file.meng";` — load imported files.
+//! `use "file.meng";` — load imported files; `use "name";` — load an installed
+//! package (`meng_deps/name/lib.meng`, see `deps.rs`).
 //!
 //! An imported file may only contain functions (and its own `use`). A file sees
 //! its own functions plus every function its imports provide (transitively).
@@ -9,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::Program;
+use crate::deps;
 
 use super::comments::strip_comments;
 use super::diagnostic::{Diagnostic, diagnostic, split_pieces};
@@ -24,15 +26,37 @@ pub struct SourceError {
     pub diagnostic: Diagnostic,
 }
 
-/// `use "path.meng";` -> `path.meng`
+/// `use "path.meng";` -> `path.meng` (a file), `use "name";` -> `name` (a package).
 pub fn parse_use(text: &str) -> Result<String, String> {
-    let usage = "invalid use, example: use \"math.meng\";";
+    let usage = "invalid use, example: use \"math.meng\"; or use \"package\";";
     let path = text.strip_prefix("use ").and_then(|s| s.strip_suffix(';')).ok_or(usage)?.trim();
     let path = path.strip_prefix('"').and_then(|s| s.strip_suffix('"')).ok_or(usage)?;
-    if !path.ends_with(".meng") || path.contains('"') {
-        return Err(format!("`{}` is not a .meng file, example: use \"math.meng\";", path));
+    if path.contains('"') || !(path.ends_with(".meng") || deps::is_package_name(path)) {
+        return Err(format!(
+            "`{}` is neither a .meng file nor a package name, example: use \"math.meng\"; or use \"package\";",
+            path
+        ));
     }
     Ok(path.to_string())
+}
+
+/// Where an import points: a file relative to `dir`, or an installed package.
+fn resolve(dir: &Path, path: &str) -> Result<(PathBuf, String), String> {
+    if path.ends_with(".meng") {
+        return Ok((dir.join(path), display_path(dir, path)));
+    }
+    let found = deps::find_package(dir, path).ok_or_else(|| {
+        format!(
+            "package `{}` is not installed; add it with `meng add {}:<version>` (or list it in {} and run `meng deps`)",
+            path,
+            path,
+            deps::DEPS_FILE
+        )
+    })?;
+    // Show it relative to the current folder when possible.
+    let cwd = std::env::current_dir().ok().and_then(|d| d.canonicalize().ok());
+    let shown = cwd.and_then(|c| found.strip_prefix(c).ok().map(Path::to_path_buf)).unwrap_or_else(|| found.clone());
+    Ok((found, shown.display().to_string()))
 }
 
 /// Parse a program file and everything it imports. `name` is how the file is
@@ -112,8 +136,14 @@ impl Loader {
                 loader.errors.push(SourceError { file: name.into(), code: code.into(), diagnostic: diagnostic(piece, message) });
             };
 
-            let display = display_path(dir, &path);
-            let full = dir.join(&path);
+            let (full, display) = match resolve(dir, &path) {
+                Ok(found) => found,
+                Err(e) => {
+                    fail(self, e);
+                    ok = false;
+                    continue;
+                }
+            };
             let Ok(canonical) = full.canonicalize() else {
                 fail(self, format!("cannot find `{}` (looked for {})", path, full.display()));
                 ok = false;

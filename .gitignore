@@ -7,6 +7,9 @@ output.c
 /program
 /test/main
 
+# Installed Meng packages (meng deps)
+meng_deps/
+
 # VS Code extension packages
 *.vsix
 node_modules/

@@ -1,6 +1,7 @@
 mod ast;
 mod backend;
 mod codegen;
+mod deps;
 mod interpreter;
 mod parser;
 
@@ -27,6 +28,28 @@ fn print_usage() {
     println!("  meng check <file.meng>      - Only check for errors (use `-` to read stdin)");
     println!("  meng emit <file.meng>       - Print the generated C code");
     println!("  meng symbols <file.meng>    - Print functions and variables as JSON (for editors)");
+    println!();
+    println!("Dependencies (deps.meow in the current folder):");
+    println!("  meng add <name[:version]>   - Add or change a dependency, then install");
+    println!("  meng deps                   - Install / update / remove dependencies to match deps.meow");
+}
+
+/// `meng add` / `meng deps` work on the project in the current folder.
+fn run_deps(args: &[String]) -> ! {
+    let project = Path::new(".");
+    let result = match (args[1].as_str(), args.get(2)) {
+        ("deps", None) => deps::install(project),
+        ("add", Some(spec)) if args.len() == 3 => deps::add(spec, project),
+        ("add", _) => Err("usage: meng add <name[:version]>, e.g. meng add postgres:0.1.0".into()),
+        _ => Err("usage: meng deps".into()),
+    };
+    match result {
+        Ok(()) => process::exit(0),
+        Err(e) => {
+            eprintln!("[ERROR] {}", e);
+            process::exit(1);
+        }
+    }
 }
 
 /// Print an error as `[ERROR] file:line:column: message`, followed by the
@@ -56,6 +79,9 @@ fn read_source(filename: &str) -> io::Result<String> {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if matches!(args.get(1).map(String::as_str), Some("deps" | "add")) {
+        run_deps(&args);
+    }
     if args.len() < 3 {
         print_usage();
         return;
