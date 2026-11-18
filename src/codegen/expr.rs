@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, Type, UnaryOp};
+use crate::ast::{Function, Param, BinOp, Expr, Type, UnaryOp};
 
 use super::{FN_PREFIX, VAR_PREFIX};
 
@@ -25,8 +25,8 @@ pub fn elem_name(elem: Type) -> (&'static str, char) {
 }
 
 /// Element value as the array stores it: strings are owned by the array.
-pub fn emit_item(elem: Type, value: &Expr) -> String {
-    if elem == Type::Str { emit_owned(value) } else { emit_top(value) }
+pub fn emit_item(fns: &[Function], elem: Type, value: &Expr) -> String {
+    if elem == Type::Str { emit_owned(fns, value) } else { emit_top(fns, value) }
 }
 
 /// `type name`, without a space after a pointer star (`char *name`).
@@ -53,31 +53,42 @@ pub fn declare(ty: Type, keep: bool, borrow: bool, name: &str) -> String {
 /// A value to be *owned* by a variable, parameter, array item, or return value.
 /// For `str` and arrays: a moved variable hands over its pointer (and becomes NULL),
 /// a fresh value (array literal, returned value) is used as is, anything else is copied.
-pub fn emit_owned(expr: &Expr) -> String {
+pub fn emit_owned(fns: &[Function], expr: &Expr) -> String {
     match expr {
         Expr::Var { name, ty: Type::Str, moved: true } => format!("meng_take(&{}{})", VAR_PREFIX, name),
         Expr::Var { name, ty: Type::Array(_), moved: true } => format!("meng_take_array(&{}{})", VAR_PREFIX, name),
-        Expr::Call { name, args, ty } if ty.is_heap() => emit_call(name, args),
-        Expr::Array { items, ty } => emit_array(items, *ty),
-        _ if expr.ty() == Type::Str => format!("meng_str_dup({})", emit_top(expr)),
-        _ if expr.ty().elem().is_some() => format!("meng_array_copy({})", emit_top(expr)),
-        _ => emit_top(expr),
+        Expr::Call { name, args, ty } if ty.is_heap() => emit_call(fns, name, args),
+        Expr::Array { items, ty } => emit_array(fns, items, *ty),
+        _ if expr.ty() == Type::Str => format!("meng_str_dup({})", emit_top(fns, expr)),
+        _ if expr.ty().elem().is_some() => format!("meng_array_copy({})", emit_top(fns, expr)),
+        _ => emit_top(fns, expr),
     }
 }
 
 /// A new array: `meng_push_int(meng_push_int(meng_array_new('i'), 1LL), 2LL)`.
-fn emit_array(items: &[Expr], ty: Type) -> String {
+fn emit_array(fns: &[Function], items: &[Expr], ty: Type) -> String {
     let elem = ty.elem().expect("an array type");
     let (name, kind) = elem_name(elem);
     items.iter().fold(format!("meng_array_new('{}')", kind), |acc, item| {
-        format!("meng_push_{}({}, {})", name, acc, emit_item(elem, item))
+        format!("meng_push_{}({}, {})", name, acc, emit_item(fns, elem, item))
     })
 }
 
+/// Whether a parameter only borrows its argument (`keep` on a `str` or an array).
+pub fn is_borrowed(p: &Param) -> bool {
+    p.keep && p.ty.is_heap()
+}
+
 /// `f_Name(arg, ...)`. Default arguments were already filled in by the parser.
-/// Parameters own their values, so `str` arguments are moved or duplicated.
-pub fn emit_call(name: &str, args: &[Expr]) -> String {
-    let args: Vec<String> = args.iter().map(emit_owned).collect();
+/// Parameters own their values, so `str` arguments are moved or duplicated;
+/// a `keep` parameter only borrows, so its argument is passed as is.
+pub fn emit_call(fns: &[Function], name: &str, args: &[Expr]) -> String {
+    let params = fns.iter().find(|f| f.name == name).map(|f| f.params.as_slice()).unwrap_or(&[]);
+    let args: Vec<String> = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| if params.get(i).is_some_and(is_borrowed) { emit_top(fns, arg) } else { emit_owned(fns, arg) })
+        .collect();
     format!("{}{}({})", FN_PREFIX, name, args.join(", "))
 }
 
@@ -98,8 +109,8 @@ pub fn has_temps(expr: &Expr) -> bool {
 }
 
 /// Expression without its outermost parentheses, for `if (...)`, assignments and arguments.
-pub fn emit_top(expr: &Expr) -> String {
-    let s = emit_expr(expr);
+pub fn emit_top(fns: &[Function], expr: &Expr) -> String {
+    let s = emit_expr(fns, expr);
     match expr {
         Expr::Binary { op, lhs, .. }
             if !matches!(op, BinOp::Div | BinOp::Mod) && !(*op == BinOp::Add && lhs.ty() == Type::Str) =>
@@ -111,7 +122,7 @@ pub fn emit_top(expr: &Expr) -> String {
 }
 
 /// Every operation is parenthesized, so C precedence never matters.
-pub fn emit_expr(expr: &Expr) -> String {
+pub fn emit_expr(fns: &[Function], expr: &Expr) -> String {
     match expr {
         Expr::Str(s) => format!("\"{}\"", escape_c_string(s)),
         Expr::Int(n) => format!("{}LL", n),
@@ -120,34 +131,34 @@ pub fn emit_expr(expr: &Expr) -> String {
         Expr::Bool(b) => b.to_string(),
         Expr::Var { name, .. } => format!("{}{}", VAR_PREFIX, name),
         // The space avoids `--` when negating a negative literal.
-        Expr::Unary { op: UnaryOp::Neg, expr } => format!("(- {})", emit_expr(expr)),
-        Expr::Unary { op: UnaryOp::Not, expr } => format!("(!{})", emit_expr(expr)),
-        Expr::Binary { op, lhs, rhs } => emit_binary(*op, lhs, rhs),
+        Expr::Unary { op: UnaryOp::Neg, expr } => format!("(- {})", emit_expr(fns, expr)),
+        Expr::Unary { op: UnaryOp::Not, expr } => format!("(!{})", emit_expr(fns, expr)),
+        Expr::Binary { op, lhs, rhs } => emit_binary(fns, *op, lhs, rhs),
         // A returned string is owned by the caller: it becomes a temporary.
-        Expr::Call { name, args, ty: Type::Str } => format!("meng_temp({})", emit_call(name, args)),
-        Expr::Call { name, args, ty: Type::Array(_) } => format!("meng_temp_array({})", emit_call(name, args)),
-        Expr::Array { items, ty } => format!("meng_temp_array({})", emit_array(items, *ty)),
+        Expr::Call { name, args, ty: Type::Str } => format!("meng_temp({})", emit_call(fns, name, args)),
+        Expr::Call { name, args, ty: Type::Array(_) } => format!("meng_temp_array({})", emit_call(fns, name, args)),
+        Expr::Array { items, ty } => format!("meng_temp_array({})", emit_array(fns, items, *ty)),
         Expr::Index { array, index, ty } => {
-            format!("meng_get_{}({}, {})", elem_name(*ty).0, emit_top(array), emit_top(index))
+            format!("meng_get_{}({}, {})", elem_name(*ty).0, emit_top(fns, array), emit_top(fns, index))
         }
-        Expr::Len(expr) if expr.ty() == Type::Str => format!("((long long)strlen({}))", emit_top(expr)),
-        Expr::Len(expr) => format!("meng_array_len({})", emit_top(expr)),
-        Expr::Call { name, args, .. } => emit_call(name, args),
-        Expr::Convert { to, expr } => emit_convert(*to, expr),
+        Expr::Len(expr) if expr.ty() == Type::Str => format!("((long long)strlen({}))", emit_top(fns, expr)),
+        Expr::Len(expr) => format!("meng_array_len({})", emit_top(fns, expr)),
+        Expr::Call { name, args, .. } => emit_call(fns, name, args),
+        Expr::Convert { to, expr } => emit_convert(fns, *to, expr),
         Expr::Read { prompt } => {
-            let prompt = prompt.as_ref().map_or("\"\"".to_string(), |p| emit_top(p));
+            let prompt = prompt.as_ref().map_or("\"\"".to_string(), |p| emit_top(fns, p));
             format!("meng_read({})", prompt)
         }
     }
 }
 
-fn emit_convert(to: Type, expr: &Expr) -> String {
-    let e = emit_top(expr);
+fn emit_convert(fns: &[Function], to: Type, expr: &Expr) -> String {
+    let e = emit_top(fns, expr);
     match (expr.ty(), to) {
-        (from, to) if from == to => emit_expr(expr),
+        (from, to) if from == to => emit_expr(fns, expr),
         (Type::Int, Type::Str) => format!("meng_int_to_str({})", e),
         (Type::Float, Type::Str) => format!("meng_float_to_str({})", e),
-        (Type::Bool, Type::Str) => format!("({} ? \"true\" : \"false\")", emit_expr(expr)),
+        (Type::Bool, Type::Str) => format!("({} ? \"true\" : \"false\")", emit_expr(fns, expr)),
         (Type::Str, Type::Int) => format!("meng_str_to_int({})", e),
         (Type::Str, Type::Float) => format!("meng_str_to_float({})", e),
         (Type::Float, Type::Int) => format!("((long long)({}))", e),
@@ -155,11 +166,11 @@ fn emit_convert(to: Type, expr: &Expr) -> String {
     }
 }
 
-fn emit_binary(op: BinOp, lhs: &Expr, rhs: &Expr) -> String {
-    let (l, r) = (emit_expr(lhs), emit_expr(rhs));
+fn emit_binary(fns: &[Function], op: BinOp, lhs: &Expr, rhs: &Expr) -> String {
+    let (l, r) = (emit_expr(fns, lhs), emit_expr(fns, rhs));
     let float = lhs.ty() == Type::Float || rhs.ty() == Type::Float;
     let c_op = match op {
-        BinOp::Add if lhs.ty() == Type::Str => return format!("meng_concat({}, {})", emit_top(lhs), emit_top(rhs)),
+        BinOp::Add if lhs.ty() == Type::Str => return format!("meng_concat({}, {})", emit_top(fns, lhs), emit_top(fns, rhs)),
         // Division and remainder go through helpers that stop on division by zero.
         BinOp::Div if float => return format!("meng_div_float({}, {})", l, r),
         BinOp::Div => return format!("meng_div_int({}, {})", l, r),

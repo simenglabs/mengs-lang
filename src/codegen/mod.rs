@@ -13,7 +13,7 @@ mod runtime;
 mod tests;
 
 use crate::ast::{Expr, Function, Program, Stmt, Type, always_returns};
-use expr::{c_decl, c_return_type, declare, elem_name, emit_call, emit_item, emit_owned, emit_top, has_temps};
+use expr::{c_decl, c_return_type, declare, elem_name, emit_call, emit_item, is_borrowed, emit_owned, emit_top, has_temps};
 
 /// Prefixes for C names so they never clash with C keywords or functions
 /// (e.g. a variable named `int` or a function named `printf`).
@@ -68,7 +68,7 @@ fn fn_signature(f: &Function) -> String {
     } else {
         f.params
             .iter()
-            .map(|p| declare(p.ty, p.keep, false, &p.name))
+            .map(|p| declare(p.ty, p.keep, is_borrowed(p), &p.name))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -101,7 +101,7 @@ impl Emitter<'_> {
         if self.temps {
             self.line(1, "size_t meng_mark = meng_temps_mark();");
         }
-        let owned_params = f.params.iter().filter(|p| p.ty.is_heap()).map(|p| (p.name.clone(), p.ty)).collect();
+        let owned_params = f.params.iter().filter(|p| p.ty.is_heap() && !is_borrowed(p)).map(|p| (p.name.clone(), p.ty)).collect();
         self.block(&f.body, 1, owned_params);
         self.c.push_str("}\n\n");
     }
@@ -130,33 +130,33 @@ impl Emitter<'_> {
     fn stmt(&mut self, stmt: &Stmt, depth: usize) {
         match stmt {
             Stmt::Set { name, ty, keep, borrow, value } => {
-                let value = if *borrow { emit_top(value) } else { emit_owned(value) };
+                let value = if *borrow { emit_top(self.functions, value) } else { emit_owned(self.functions, value) };
                 self.line(depth, &format!("{} = {};", declare(*ty, *keep, *borrow, name), value));
                 if ty.is_heap() && !*borrow {
                     self.scopes.last_mut().expect("inside a block").push((name.clone(), *ty));
                 }
             }
             Stmt::Assign { name, value } if value.ty() == Type::Str => {
-                self.line(depth, &format!("meng_str_set(&{}{}, {});", VAR_PREFIX, name, emit_owned(value)));
+                self.line(depth, &format!("meng_str_set(&{}{}, {});", VAR_PREFIX, name, emit_owned(self.functions, value)));
             }
             Stmt::Assign { name, value } if value.ty().elem().is_some() => {
-                self.line(depth, &format!("meng_array_set(&{}{}, {});", VAR_PREFIX, name, emit_owned(value)));
+                self.line(depth, &format!("meng_array_set(&{}{}, {});", VAR_PREFIX, name, emit_owned(self.functions, value)));
             }
             Stmt::SetIndex { name, index, value, elem } => {
                 let (kind, _) = elem_name(*elem);
-                let (index, value) = (emit_top(index), emit_item(*elem, value));
+                let (index, value) = (emit_top(self.functions, index), emit_item(self.functions, *elem, value));
                 self.line(depth, &format!("meng_put_{}({}{}, {}, {});", kind, VAR_PREFIX, name, index, value));
             }
             Stmt::Push { name, value, elem } => {
                 let (kind, _) = elem_name(*elem);
-                self.line(depth, &format!("meng_push_{}({}{}, {});", kind, VAR_PREFIX, name, emit_item(*elem, value)));
+                self.line(depth, &format!("meng_push_{}({}{}, {});", kind, VAR_PREFIX, name, emit_item(self.functions, *elem, value)));
             }
             Stmt::Assign { name, value } => {
-                self.line(depth, &format!("{}{} = {};", VAR_PREFIX, name, emit_top(value)));
+                self.line(depth, &format!("{}{} = {};", VAR_PREFIX, name, emit_top(self.functions, value)));
             }
-            Stmt::Print(expr) => self.line(depth, &emit_print(expr)),
+            Stmt::Print(expr) => self.line(depth, &emit_print(self.functions, expr)),
             Stmt::Call { name, args } => {
-                let call = emit_call(name, args);
+                let call = emit_call(self.functions, name, args);
                 // A returned string/array that nobody uses is still owned: make it a temporary.
                 let call = match self.return_type(name) {
                     Some(Type::Str) => format!("meng_temp({})", call),
@@ -170,7 +170,7 @@ impl Emitter<'_> {
                 self.emit_if(stmt, depth);
             }
             Stmt::While { cond, body } => {
-                self.line(depth, &format!("while ({}) {{", emit_top(cond)));
+                self.line(depth, &format!("while ({}) {{", emit_top(self.functions, cond)));
                 if has_temps(cond) {
                     self.release(depth + 1);
                 }
@@ -200,11 +200,11 @@ impl Emitter<'_> {
                 }
                 self.line(depth, "return;");
             }
-            Some(v) if cleanup.is_empty() => self.line(depth, &format!("return {};", emit_owned(v))),
+            Some(v) if cleanup.is_empty() => self.line(depth, &format!("return {};", emit_owned(self.functions, v))),
             Some(v) => {
                 let ty = c_return_type(Some(v.ty()));
                 self.line(depth, "{");
-                self.line(depth + 1, &format!("{} = {};", c_decl(ty, "meng_ret"), emit_owned(v)));
+                self.line(depth + 1, &format!("{} = {};", c_decl(ty, "meng_ret"), emit_owned(self.functions, v)));
                 for line in cleanup {
                     self.line(depth + 1, &line);
                 }
@@ -221,7 +221,7 @@ impl Emitter<'_> {
             return;
         };
         let indent = INDENT.repeat(depth);
-        self.c.push_str(&format!("if ({}) {{\n", emit_top(cond)));
+        self.c.push_str(&format!("if ({}) {{\n", emit_top(self.functions, cond)));
         self.block(body, depth + 1, Vec::new());
         self.c.push_str(&indent);
         self.c.push('}');
@@ -276,8 +276,8 @@ fn stmt_has_temps_deep(stmt: &Stmt, functions: &[Function]) -> bool {
     }
 }
 
-fn emit_print(expr: &Expr) -> String {
-    let e = emit_top(expr);
+fn emit_print(fns: &[Function], expr: &Expr) -> String {
+    let e = emit_top(fns, expr);
     match expr.ty() {
         Type::Str => format!("printf(\"%s\\n\", {});", e),
         Type::Int => format!("printf(\"%lld\\n\", {});", e),

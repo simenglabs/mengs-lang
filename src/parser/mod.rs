@@ -284,7 +284,7 @@ impl<'a> Parser<'a> {
         self.current = Some(sig.clone());
         self.blocks.push(Vec::new());
         for p in &sig.params {
-            let kind = if p.keep { Kind::Keep } else if p.reuse { Kind::Reuse } else { Kind::Owned };
+            let kind = if p.keep && p.ty.is_heap() { Kind::KeepParam } else if p.keep { Kind::Keep } else if p.reuse { Kind::Reuse } else { Kind::Owned };
             if let Err(e) = scope.declare(&p.name, p.ty, kind) {
                 self.error(opener, e);
             }

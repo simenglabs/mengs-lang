@@ -70,8 +70,28 @@ fn reuse_is_never_moved() {
 }
 
 #[test]
-fn keep_and_reuse_parameters_can_be_used_many_times() {
-    ok("fnc F(keep a: str, reuse b: str)->\n    set x: str = a;\n    set y: str = a;\n    set z: str = b;\n    set w: str = b;\n<-;");
+fn reuse_parameters_can_be_used_many_times() {
+    ok("fnc F(reuse b: str)->\n    set z: str = b;\n    set w: str = b;\n<-;");
+}
+
+#[test]
+fn keep_parameter_borrows_the_argument() {
+    ok("fnc Len(keep s: str): int ->\n    return len(s);\n<-;\nset name: str = \"meng\";\nshow(Len(name));\nshow(Len(name));\nshow(name);");
+}
+
+#[test]
+fn keep_parameter_cannot_be_moved() {
+    let take = "fnc Take(s: str)->\n<-;\n";
+    let msg = "is a keep parameter: it is only borrowed";
+    err(&format!("{take}fnc F(keep s: str)->\n    Take(s);\n<-;"), 4, msg);
+    err(&format!("{take}fnc F(keep s: str)->\n    set t: str = s;\n<-;"), 4, msg);
+    err(&format!("{take}fnc F(keep s: str): str ->\n    return s;\n<-;"), 4, msg);
+    err(&format!("{take}fnc F(keep xs: [int])->\n    set ys: [int] = xs;\n<-;"), 4, msg);
+}
+
+#[test]
+fn keep_parameter_can_be_copied_and_reborrowed() {
+    ok("fnc G(keep s: str)->\n<-;\nfnc F(keep s: str): str ->\n    G(s);\n    s ()=> t;\n    return t;\n<-;");
 }
 
 #[test]

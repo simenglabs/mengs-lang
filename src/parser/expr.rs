@@ -384,12 +384,20 @@ impl ExprParser<'_> {
 
 impl ExprParser<'_> {
     /// Arguments of `name(...)` (the `(` is already consumed). Bare variables are
-    /// moved into the function. Checks the signature and fills in defaults.
+    /// moved into the function, except for `keep` parameters, which borrow them. Checks the signature and fills in defaults.
     fn call(&mut self, name: &str) -> Result<(Vec<Expr>, Option<Type>), String> {
         if self.scope.function(name).is_none() {
             return Err(format!("function `{}` is not defined", name));
         }
-        let params: Vec<Type> = self.scope.function(name).expect("checked above").params.iter().map(|p| p.ty).collect();
+        // Each parameter's type, and whether it only borrows its argument (`keep` on a str or array).
+        let params: Vec<(Type, bool)> = self
+            .scope
+            .function(name)
+            .expect("checked above")
+            .params
+            .iter()
+            .map(|p| (p.ty, p.keep && p.ty.is_heap()))
+            .collect();
         let mut args = Vec::new();
         if !self.eat(")") {
             loop {
@@ -397,12 +405,14 @@ impl ExprParser<'_> {
                 let empty = self.peek() == Some(&Token::Sym("["))
                     && self.tokens.get(self.pos + 1) == Some(&Token::Sym("]"))
                     && matches!(self.tokens.get(self.pos + 2), Some(Token::Sym(",")) | Some(Token::Sym(")")));
-                if let (true, Some(&ty @ Type::Array(_))) = (empty, params.get(args.len())) {
+                if let (true, Some(ty @ Type::Array(_))) = (empty, params.get(args.len()).map(|p| p.0)) {
                     self.pos += 2;
                     args.push(Expr::Array { items: Vec::new(), ty });
                 } else {
+                    let borrows = params.get(args.len()).is_some_and(|p| p.1);
                     let arg = match self.or()? {
-                    Expr::Var { name, ty, .. } => self.take(name, ty)?,
+                        // A `keep` parameter only borrows: the variable stays where it is.
+                        Expr::Var { name, ty, .. } if !borrows => self.take(name, ty)?,
                         arg => arg,
                     };
                     args.push(arg);

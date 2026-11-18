@@ -10,6 +10,12 @@ fn output(source: &str) -> String {
 }
 
 #[test]
+fn keep_parameters_leave_the_argument_usable() {
+    let src = "fnc Len(keep s: str): int ->\n    return len(s);\n<-;\nset name: str = \"meng\";\nshow(Len(name));\nshow(Len(name));\nshow(name);";
+    assert_eq!(output(src), "4\n4\nmeng\n");
+}
+
+#[test]
 fn prints_all_types() {
     let src = "set s: str = \"Meng\";\nset i: int = -7;\nset f: float = 2;\nset b: bool = true;\n\
                show(s);\nshow(i);\nshow(f);\nshow(b);\n";

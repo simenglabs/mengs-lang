@@ -220,6 +220,18 @@ fn runtime_is_only_added_when_used() {
 }
 
 #[test]
+fn keep_parameters_are_borrowed() {
+    use crate::parser::parse;
+    let src = "fnc Len(keep s: str): int -> return len(s); <-;\nset name: str = \"meng\";\nshow(Len(name));";
+    let c = generate_c(&parse(src).unwrap());
+    assert!(c.contains("static long long f_Len(const char *v_s)"), "{c}");
+    assert!(c.contains("f_Len(v_name)"), "{c}");
+    let body = &c[c.find("static long long f_Len(const char *v_s) {").expect("definition")..];
+    let body = &body[..body.find("\n}\n").unwrap()];
+    assert!(!body.contains("free(v_s)"), "{c}");
+}
+
+#[test]
 fn arrays_are_built_moved_and_freed() {
     use crate::parser::parse;
     let src = "fnc Sum(xs: [int]): int ->\n    return len(xs);\n<-;\n\

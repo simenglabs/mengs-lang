@@ -2,8 +2,8 @@
 
 Meng has no garbage collector. Every value has one owner, and the compiler checks at
 compile time that a value is not used after it was handed to someone else. This guide
-describes the rules implemented today. The accepted direction for v1 (`keep` parameters
-borrowing, and more) is in [design/v1-decisions.md](../design/v1-decisions.md), section
+describes the rules implemented today. The accepted direction for v1 (more ownership
+changes) is in [design/v1-decisions.md](../design/v1-decisions.md), section
 D3; this guide changes when those rules land.
 
 ## Moves
@@ -91,14 +91,49 @@ show(taken);
 
 ## `keep` and `reuse`
 
-- `set keep x: T = ...;` is a constant. It cannot be reassigned. When a `keep` value
-  would be moved, it is copied instead, so it stays usable.
-- `set reuse x: T = ...;` can be moved any number of times: each move copies the value.
-  For strings and arrays this is a full copy (cost proportional to the size), so use
-  `reuse` for small values and convenience. On a scalar it only produces a warning.
-- On parameters, `keep` and `reuse` describe the parameter inside the function (a `keep`
-  parameter cannot be reassigned; a `reuse` parameter can be moved many times there).
-  The caller's variable is still moved by the call unless it is `keep` or `reuse` itself.
+- `set keep x: T = ...;` is a constant: it is immutable and cannot be reassigned. When a
+  `keep` value would be moved, it is copied instead, so it stays usable.
+- `set reuse x: T = ...;` can be moved any number of times: each move copies the whole
+  value. For strings and arrays this costs time proportional to the size (O(n)) every
+  time, so use `reuse` for small values and convenience. On a scalar it only produces a
+  warning.
+- A `keep` parameter of type `str` or an array **borrows** its argument: the caller's
+  variable is not moved and nothing is copied. The borrow is local and read-only: inside
+  the function the parameter can be read, borrowed (`<==`), copied (`()=>`), and passed on
+  to another `keep` parameter, but it cannot be moved (passed to a plain parameter,
+  assigned with `set y: T = x;`, or returned) or changed, because it does not belong to
+  the function. To keep or return the value, copy it first.
+- A `reuse` parameter can be moved many times inside the function. A caller's `reuse`
+  variable is copied into the call each time.
+
+```meng
+fnc Len(keep s: str): int ->
+    return len(s);
+<-;
+
+fnc Shout(keep s: str): str ->
+    s ()=> copy;
+    return copy;
+<-;
+
+set word: str = "meng";
+show(Len(word));
+show(Len(word));
+show(Shout(word));
+show(word);
+```
+
+A `keep` parameter cannot escape the function:
+
+```text
+fnc Take(s: str)->
+<-;
+fnc F(keep s: str)->
+    Take(s);
+<-;
+
+[ERROR] file.meng:4:10: `s` is a keep parameter: it is only borrowed, so it cannot be moved; copy it with `s ()=> new_name;`
+```
 
 ```meng
 fnc Greet(name: str)->
@@ -112,6 +147,7 @@ Greet(owner);
 Greet(lang);
 Greet(lang);
 show(owner);
+```
 ```
 
 ## Borrow: `<==`

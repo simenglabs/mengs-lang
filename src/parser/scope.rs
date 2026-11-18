@@ -30,6 +30,8 @@ pub enum Kind {
     Reuse,
     /// `keep`: constant, never moved or reassigned.
     Keep,
+    /// `keep` parameter of a heap type: only borrowed from the caller, so it cannot be moved or changed.
+    KeepParam,
 }
 
 #[derive(Clone)]
@@ -116,6 +118,12 @@ impl Scope {
         }
 
         let ty = var.ty;
+        if access == Access::Move && var.kind == Kind::KeepParam {
+            return Err(format!(
+                "`{0}` is a keep parameter: it is only borrowed, so it cannot be moved; copy it with `{0} ()=> new_name;`",
+                name
+            ));
+        }
         if access == Access::Move && ty.is_heap() && var.kind == Kind::Owned && var.borrows.is_none() {
             self.vars.get_mut(name).unwrap().moved_at = Some(line);
             self.events.borrow_mut().push(OwnershipEvent { name: name.to_string(), line, moved: true });
@@ -127,7 +135,7 @@ impl Scope {
     /// usable) and makes existing borrows of it stale. Returns its type.
     pub fn reassign(&mut self, name: &str, line: usize) -> Result<Type, String> {
         let var = self.get(name)?;
-        if var.kind == Kind::Keep {
+        if matches!(var.kind, Kind::Keep | Kind::KeepParam) {
             return Err(format!("`{}` is a constant (keep) and cannot be reassigned", name));
         }
         if let Some(owner) = &var.borrows {
@@ -145,7 +153,7 @@ impl Scope {
     pub fn mutate(&mut self, name: &str, line: usize) -> Result<Type, String> {
         let ty = self.access(name, line, Access::Read)?;
         let var = self.get(name)?;
-        if var.kind == Kind::Keep {
+        if matches!(var.kind, Kind::Keep | Kind::KeepParam) {
             return Err(format!("`{}` is a constant (keep) and cannot be changed", name));
         }
         if let Some(owner) = &var.borrows {
